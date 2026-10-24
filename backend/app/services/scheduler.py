@@ -17,8 +17,11 @@ from .. import enums as e
 from ..database import session_scope
 from ..models import FdrRecord, Institution, ReleaseApplication
 from . import notifications as notify
-from .maturity import classify_with_thresholds, enrich_rows
+from .maturity import enrich_rows
 from .settings_service import maturity_thresholds
+
+# Classification is imported lazily inside _run() to avoid pulling in heavy
+# query helpers at module import time on cold serverless starts.
 
 _scheduler = None
 
@@ -36,6 +39,8 @@ def run_monitoring_job(db: Optional[Session] = None) -> dict:
 
 
 def _run(db: Session) -> dict:
+    from ..services.maturity import classify_with_thresholds
+
     today = date.today()
     thresholds = maturity_thresholds(db)
 
@@ -81,12 +86,21 @@ def start_scheduler() -> None:
 
     if not settings.scheduler_enabled or _scheduler is not None:
         return
+    # APScheduler is a long-running-process concern. Do not start it inside
+    # ephemeral serverless runtimes (Vercel) even when SCHEDULER_ENABLED is true.
+    import os
+    if os.environ.get("VERCEL") == "1":
+        return
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
     except ImportError:  # pragma: no cover
         return
 
     _scheduler = BackgroundScheduler(timezone=settings.app_timezone)
+    # Interval-based scheduler only stays alive while the process is alive.
+    # Vercel serverless functions are short-lived, so an internal interval job does
+    # NOT replace Vercel Cron or any external scheduler. It is kept here for
+    # long-running/local environments only.
     _scheduler.add_job(
         run_monitoring_job,
         "interval",

@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     if settings.scheduler_enabled:
         start_scheduler()
         logger.info(
-            "Maturity monitoring scheduler started (interval %s min)",
+            "Scheduler configured (interval %s min).",
             settings.maturity_check_interval_minutes,
         )
     yield

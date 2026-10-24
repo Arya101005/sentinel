@@ -83,7 +83,7 @@ def signup(payload: UserCreate, request: Request, db: Session = Depends(get_db))
             (User.username == payload.username) | (User.email == payload.email)
         )
     ).scalar_one_or_none()
-    if clash:
+    if clash is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "duplicate_user", "message": "A user with that username or email already exists."},
