@@ -1,0 +1,41 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+frontend/dist/
+.vite/
+
+# Local environment & secrets
+.env
+.env.local
+*.local
+
+# Runtime data
+backend/storage/
+backend/test_storage/
+backend/*.db
+backend/fdr_sentinel.db
+*.sqlite3
+*.db
+
+# Test / tooling output
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+coverage/
+
+# Editors / OS / build info
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tsbuildinfo

@@ -1,0 +1,21 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+alembic==1.14.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+PyJWT==2.10.1
+pymupdf==1.25.1
+Pillow==11.1.0
+pytesseract==0.3.13
+apscheduler==3.11.0
+email-validator==2.2.0
+
+# --- PostgreSQL (Supabase) ---
+psycopg2-binary==2.9.10
+
+# --- test ---
+pytest==8.3.4
+pytest-cov==6.0.0
+httpx==0.28.1
