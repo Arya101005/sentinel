@@ -42,3 +42,11 @@ Thumbs.db
 .temp-supabase-creds
 
 .vercel
+
+# Local dev logs / screenshots / Vercel oauth flow captures (not shipped)
+*.log
+screenshots/
+vercel-oauth-device.png
+
+# Vite dev server port collision screenshots / logs
+*vite*.log
