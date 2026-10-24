@@ -23,6 +23,6 @@
     { "source": "/(.*)", "destination": { "service": "frontend" } }
   ],
   "crons": [
-    { "path": "/api/v1/monitoring/cron", "schedule": "0 */6 * * *" }
+    { "path": "/api/v1/monitoring/cron", "schedule": "0 0 * * *" }
   ]
 }
