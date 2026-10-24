@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     maturity_check_interval_minutes: int = 360
     run_jobs_on_startup: bool = True
 
+    # Supabase (Postgres is set via DATABASE_URL; Storage used for document blobs)
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    supabase_storage_bucket: str = "fdr-documents"
+
+    # Vercel Cron / protected job trigger
+    cron_secret: str = ""
+
     @field_validator("cors_origins", mode="after")
     @classmethod
     def _split_origins(cls, value: str) -> str:
@@ -89,6 +97,11 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def supabase_storage_enabled(self) -> bool:
+        """Store document blobs in Supabase Storage when configured (e.g. serverless)."""
+        return bool(self.supabase_url and self.supabase_service_role_key)
 
 
 @lru_cache

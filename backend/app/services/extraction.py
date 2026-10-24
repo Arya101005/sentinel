@@ -19,12 +19,15 @@ import hashlib
 import io
 import re
 import unicodedata
+import urllib.error
+import urllib.request
 import uuid
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -444,6 +447,59 @@ CONFIDENT_THRESHOLD = 0.85  # below this a field is explicitly flagged for manua
 
 
 # ---------------------------------------------------------------------------
+# Private storage backends
+#   * Local disk by default (development / long-running hosts).
+#   * Supabase Storage when SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set —
+#     required on serverless hosts (e.g. Vercel) where disk is ephemeral.
+# ---------------------------------------------------------------------------
+def _bucket_key(relative: str) -> str:
+    return relative.replace("\\", "/").lstrip("/")
+
+
+def _supabase_object_url(object_key: str) -> str:
+    base = settings.supabase_url.rstrip("/")
+    bucket = settings.supabase_storage_bucket
+    return f"{base}/storage/v1/object/{bucket}/{quote(_bucket_key(object_key), safe='/')}"
+
+
+def _supabase_headers(content_type: Optional[str] = None) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {settings.supabase_service_role_key}"}
+    if content_type:
+        headers["Content-Type"] = content_type
+    return headers
+
+
+def storage_put(object_key: str, data: bytes, mime: str) -> None:
+    """Upload bytes to Supabase Storage (upsert). Raises ValueError on failure."""
+    request = urllib.request.Request(_supabase_object_url(object_key), data=data, method="POST")
+    for header, value in _supabase_headers(mime).items():
+        request.add_header(header, value)
+    request.add_header("x-upsert", "true")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            if response.status >= 400:
+                raise ValueError(f"Document storage rejected the upload (HTTP {response.status}).")
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"Document storage upload failed (HTTP {exc.code}).") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError("Document storage is unavailable.") from exc
+
+
+def storage_get(object_key: str) -> bytes:
+    """Download bytes from Supabase Storage. Raises ValueError on failure."""
+    request = urllib.request.Request(_supabase_object_url(object_key))
+    for header, value in _supabase_headers().items():
+        request.add_header(header, value)
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"Document storage download failed (HTTP {exc.code}).") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError("Document storage is unavailable.") from exc
+
+
+# ---------------------------------------------------------------------------
 # Pipeline orchestration
 # ---------------------------------------------------------------------------
 def store_upload(
@@ -476,27 +532,35 @@ def store_upload(
     relative_dir = Path("documents") / str(institution_id)
     prefix = filename_prefix or uuid.uuid4().hex
     relative_path = relative_dir / f"{prefix}_{safe_name}"
-    absolute = settings.storage_path / relative_path
-    absolute.parent.mkdir(parents=True, exist_ok=True)
-    if absolute.exists():
-        # Deterministic seed prefixes can collide on reseeds; suffix instead of failing.
-        stem = f"{prefix}_{safe_name}"
-        for n in range(1, 1000):
-            candidate = relative_dir / f"{stem}.{n}"
-            if not (settings.storage_path / candidate).exists():
-                relative_path = candidate
-                break
-        else:  # pragma: no cover - pathological collision storm
-            raise ValueError("Storage collision; please retry the upload.")
+
+    if settings.supabase_storage_enabled:
+        # Supabase Storage (upsert): unique prefixes for real uploads; seed
+        # reseeds are idempotent because the same content rewrites the key.
+        object_key = str(relative_path).replace("\\", "/")
+        storage_put(object_key, data, mime)
+    else:
         absolute = settings.storage_path / relative_path
-    absolute.write_bytes(data)
+        absolute.parent.mkdir(parents=True, exist_ok=True)
+        if absolute.exists():
+            # Deterministic seed prefixes can collide on reseeds; suffix instead of failing.
+            stem = f"{prefix}_{safe_name}"
+            for n in range(1, 1000):
+                candidate = relative_dir / f"{stem}.{n}"
+                if not (settings.storage_path / candidate).exists():
+                    relative_path = candidate
+                    break
+            else:  # pragma: no cover - pathological collision storm
+                raise ValueError("Storage collision; please retry the upload.")
+            absolute = settings.storage_path / relative_path
+        absolute.write_bytes(data)
+        object_key = str(relative_path).replace("\\", "/")
 
     document = Document(
         institution_id=institution_id,
         fdr_id=fdr_id,
         document_type=document_type,
         original_filename=safe_name,
-        private_storage_path=str(relative_path).replace("\\", "/"),
+        private_storage_path=object_key,
         mime_type=mime,
         file_size=len(data),
         checksum=checksum,
@@ -511,6 +575,8 @@ def store_upload(
 
 def read_document_bytes(document: Document) -> bytes:
     """Load file bytes from private storage, refusing any path outside the root."""
+    if settings.supabase_storage_enabled:
+        return storage_get(document.private_storage_path)
     root = settings.storage_path.resolve()
     target = (settings.storage_path / document.private_storage_path).resolve()
     if not str(target).startswith(str(root)):

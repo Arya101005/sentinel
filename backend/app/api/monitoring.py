@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import enums as e
+from ..config import settings
 from ..database import get_db
 from ..models import ClearanceRecord, ReleaseApplication, User
 from ..schemas.common import Page, paginate
@@ -250,6 +251,37 @@ def run_checks(
         db,
         actor_user_id=user.id,
         action="monitoring.run",
+        entity_type="monitoring",
+        metadata={
+            "checked": result["checked"],
+            "created": result["notifications_created"],
+            "escalations": result["escalations_created"],
+        },
+        request_id=request.headers.get("X-Request-ID"),
+    )
+    db.commit()
+    return result
+
+
+@router.get("/cron")
+def run_monitoring_cron(request: Request, db: Session = Depends(get_db)):
+    """Scheduled-job entry point (e.g. Vercel Cron) for the maturity/escalation pass.
+
+    The in-process APScheduler job cannot run in a serverless function, so on
+    Vercel a Cron hits this route instead. When ``CRON_SECRET`` is configured,
+    the request must carry ``Authorization: Bearer ${CRON_SECRET}``; with no
+    secret set (local development) the trigger is open.
+    """
+    secret = settings.cron_secret
+    if secret:
+        provided = request.headers.get("authorization", "")
+        if provided != f"Bearer {secret}":
+            raise HTTPException(status_code=401, detail="Invalid or missing cron secret.")
+    result = run_monitoring_job(db)
+    record_audit(
+        db,
+        actor_user_id=None,
+        action="cron.monitoring_run",
         entity_type="monitoring",
         metadata={
             "checked": result["checked"],

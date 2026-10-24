@@ -166,13 +166,16 @@ Two containers are provided (see *Docker*) — or deploy the pieces separately:
 
 - **Frontend:** build (`npm run build`) and host `frontend/dist` on any static host (Vercel, Netlify, Cloudflare
   Pages). Set `VITE_API_BASE` at build time to the backend's public origin if the API is on another domain.
-- **Backend:** run behind a WSGI/ASGI process (`uvicorn app.main:app --workers …`) on a Python-capable host.
-  Set `APP_ENV=production`, a strong `JWT_SECRET`, `DATABASE_URL=postgresql://…`, and configure `CORS_ORIGINS`.
+- **Backend:** run behind a WSGI/ASGI process (`uvicorn app.main:app --workers …`) on a Python-capable host, **or**
+  deploy serverless to Vercel (a serverless entrypoint, Vercel Cron trigger and Supabase Storage are wired up — see
+  below). Set `APP_ENV=production`, a strong `JWT_SECRET`, `DATABASE_URL=postgresql://…`, and configure `CORS_ORIGINS`.
 - **Database:** PostgreSQL (Supabase or any managed Postgres).
-- **Files:** keep `STORAGE_ROOT` on persistent private storage with restricted access.
+- **Files:** keep `STORAGE_ROOT` on persistent private storage with restricted access, **or** set the `SUPABASE_*`
+  variables to store document blobs in Supabase Storage (required on serverless).
 
-> The background maturity job runs inside the backend process (APScheduler). Host the backend on a service that
-> keeps a long-running process alive — a serverless function alone will not run the scheduled job.
+> On a long-running host the background maturity job runs inside the backend process (APScheduler). On a serverless
+> host set `SCHEDULER_ENABLED=false` and let Vercel Cron call `/api/v1/monitoring/cron` instead (already configured in
+> `backend/vercel.json`).
 
 ### Deploying to Vercel + Supabase (recommended split)
 
@@ -192,16 +195,30 @@ Two containers are provided (see *Docker*) — or deploy the pieces separately:
    creates its schema (`RUN_DB_CREATE=true`) and seeds demo data when `APP_ENV != production`.
 4. Add the frontend's URL to the backend's `CORS_ORIGINS`.
 
-**Backend → where it runs:** a FastAPI app with a *persistent* background scheduler and local file uploads fits a
-long-running host (Render / Railway / Fly / Cloud Run) better than a serverless function. If you deploy the backend
-to **Vercel** as a Python serverless function you must, for it to behave correctly:
+**Backend → Vercel (Python serverless):** the backend is now serverless-ready. `backend/api/index.py` exports the
+FastAPI ASGI app, and `backend/vercel.json` rewrites every path to it and schedules the maturity job via Vercel Cron.
+Deploy it as a second Vercel project from the same repo:
 
-- set `SCHEDULER_ENABLED=false` and trigger the monitoring job from a **Vercel Cron** that hits an endpoint (the job
-  is idempotent), and
-- replace local-disk file uploads with **Supabase Storage** (serverless filesystem is ephemeral) — this is a code
-  change to `store_upload` / `read_document_bytes` and is **not yet implemented**.
+1. Create a second Vercel project and set its **Root Directory** to `backend` (Python runtime; `backend/requirements.txt`
+   is auto-detected).
+2. Set the environment variables:
+   - `APP_ENV=production`, `DEBUG=false`
+   - `JWT_SECRET` = a long random string
+   - `DATABASE_URL` = the Supabase **pooler** URI (`:6543`) with `?sslmode=require`
+   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-only secret), `SUPABASE_STORAGE_BUCKET` — routes document
+     uploads to Supabase Storage instead of the ephemeral serverless disk.
+   - `CRON_SECRET` = a long random string (Vercel Cron sends it as `Authorization: Bearer …` to the cron endpoint)
+   - `SCHEDULER_ENABLED=false` (the in-process scheduler is replaced by the Vercel Cron hit)
+   - `CORS_ORIGINS` = the frontend's URL
+3. Create a **private** Supabase Storage bucket named after `SUPABASE_STORAGE_BUCKET` (Supabase → Storage).
+4. Deploy. `api/index.py` creates the DB schema on first import (idempotent `CREATE TABLE IF NOT EXISTS`, controlled by
+   `RUN_DB_CREATE`).
 
-See *Known limitations* for what is and isn't wired up for production hosting.
+**Seeding demo data on Supabase:** auto-seed runs only when `APP_ENV != production`. To populate the demo dataset in
+Supabase, run the seed once from your machine against the production database (with the `SUPABASE_*` and `DATABASE_URL`
+vars set, the sample documents are uploaded to Supabase Storage as well):
+
+    cd backend && SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… DATABASE_URL=… python -m app.seed --reset
 
 ## 11. Configuring OCR
 
