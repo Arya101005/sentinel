@@ -24,7 +24,7 @@ export default function ResetPass() {
         body: JSON.stringify({ token, new_password: password }),
       }).then(async (r) => {
         const body = await r.json();
-        if (!r.ok) throw new ApiError(body.detail ?? "Password reset failed.");
+        if (!r.ok) throw new ApiError(r.status, body.detail ?? "Password reset failed.", String(body.code));
         return body;
       });
       setSuccess(true);

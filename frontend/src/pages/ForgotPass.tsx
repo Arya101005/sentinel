@@ -23,7 +23,7 @@ export default function ForgotPass() {
         body: JSON.stringify({ email }),
       }).then(async (r) => {
         const body = await r.json();
-        if (!r.ok) throw new ApiError(body.detail ?? "Request failed.");
+        if (!r.ok) throw new ApiError(r.status, body.detail ?? "Request failed.", String(body.code));
         return body;
       });
       setSuccess(true);

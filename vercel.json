@@ -1,17 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "backend/api/index.py": {
-      "memory": 512,
-      "maxDuration": 10
-    }
-  },
   "services": {
     "backend": {
       "root": "backend",
       "framework": "fastapi",
       "entrypoint": "api.index:app",
-      "installCommand": "pip install -r requirements.txt"
+      "installCommand": "pip install -r requirements.txt",
+      "functions": {
+        "api/index.py": {
+          "memory": 512,
+          "maxDuration": 10
+        }
+      }
     },
     "frontend": {
       "root": "frontend",
