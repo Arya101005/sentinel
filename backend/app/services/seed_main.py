@@ -9,8 +9,8 @@ import sys
 sys.path.insert(0, __file__.rsplit("/", 2)[0] if "/" in __file__ else "..")
 
 from .seed import reset_and_seed, seed_if_empty
-from .database import session_scope, init_db
-from .services.settings_service import ensure_default_settings
+from app.database import session_scope, init_db
+from app.services.settings_service import ensure_default_settings
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed FDR Sentinel demo data")
