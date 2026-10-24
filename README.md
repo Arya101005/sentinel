@@ -174,17 +174,21 @@ Two containers are provided (see *Docker*) — or deploy the pieces separately:
   variables to store document blobs in Supabase Storage (required on serverless).
 
 > On a long-running host the background maturity job runs inside the backend process (APScheduler). On a serverless
-> host set `SCHEDULER_ENABLED=false` and let Vercel Cron call `/api/v1/monitoring/cron` instead (already configured in
-> `backend/vercel.json`).
+> host set `SCHEDULER_ENABLED=false` and let Vercel Cron call `/api/v1/monitoring/cron` instead (configured in the root
+> `vercel.json`).
 
-### Deploying to Vercel + Supabase (recommended split)
+### Deploying everything to Vercel (single project — Services)
 
-**Frontend → Vercel** (static Vite build):
+The repo ships a root [`vercel.json`](vercel.json) for Vercel's **Services** preset: one project grouping the FastAPI
+backend (served under `/api`) and the Vite frontend (served under `/`), sharing one domain. Because they share the
+origin, the frontend calls the API **same-origin** at `/api/v1/...` — leave `VITE_API_BASE` empty (no CORS needed).
 
-1. Push this repository to GitHub and import it in Vercel.
-2. Set the project **Root Directory** to `frontend` (framework auto-detected as Vite; config in `frontend/vercel.json`).
-3. Set the environment variable **`VITE_API_BASE`** = the deployed backend origin (e.g. `https://<backend>.vercel.app`).
-4. Deploy. Client-side routes fall back to `index.html` automatically.
+1. Push to GitHub and import the repo in Vercel. Pick the **Services / multi-service** import (Root Directory `./`);
+   Vercel reads the root `vercel.json` and detects `backend` (FastAPI) and `frontend` (Vite).
+2. Set the environment variables (Project → Settings → Environment Variables) listed under *Backend* below.
+3. Deploy. Rewrites send `/api/*` → the backend and everything else → the frontend (SPA fallback included), and a
+   top-level Vercel Cron hits `/api/v1/monitoring/cron` every 6 hours. `backend/api/index.py` creates the schema on
+   first import (idempotent `CREATE TABLE IF NOT EXISTS`, controlled by `RUN_DB_CREATE`).
 
 **Database → Supabase Postgres:**
 
@@ -193,26 +197,19 @@ Two containers are provided (see *Docker*) — or deploy the pieces separately:
 2. Set `DATABASE_URL` on the backend to the pooler URI with `?sslmode=require`.
 3. `psycopg2-binary` is already in `backend/requirements.txt`. On the first run against an empty database the app
    creates its schema (`RUN_DB_CREATE=true`) and seeds demo data when `APP_ENV != production`.
-4. Add the frontend's URL to the backend's `CORS_ORIGINS`.
+4. Same-origin on Vercel means CORS is not required; if you later split the frontend onto its own domain, add that
+   origin to the backend's `CORS_ORIGINS`.
 
-**Backend → Vercel (Python serverless):** the backend is now serverless-ready. `backend/api/index.py` exports the
-FastAPI ASGI app, and `backend/vercel.json` rewrites every path to it and schedules the maturity job via Vercel Cron.
-Deploy it as a second Vercel project from the same repo:
+**Backend environment variables** (set once for the project; they apply to the backend service):
 
-1. Create a second Vercel project and set its **Root Directory** to `backend` (Python runtime; `backend/requirements.txt`
-   is auto-detected).
-2. Set the environment variables:
-   - `APP_ENV=production`, `DEBUG=false`
-   - `JWT_SECRET` = a long random string
-   - `DATABASE_URL` = the Supabase **pooler** URI (`:6543`) with `?sslmode=require`
-   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-only secret), `SUPABASE_STORAGE_BUCKET` — routes document
-     uploads to Supabase Storage instead of the ephemeral serverless disk.
-   - `CRON_SECRET` = a long random string (Vercel Cron sends it as `Authorization: Bearer …` to the cron endpoint)
-   - `SCHEDULER_ENABLED=false` (the in-process scheduler is replaced by the Vercel Cron hit)
-   - `CORS_ORIGINS` = the frontend's URL
-3. Create a **private** Supabase Storage bucket named after `SUPABASE_STORAGE_BUCKET` (Supabase → Storage).
-4. Deploy. `api/index.py` creates the DB schema on first import (idempotent `CREATE TABLE IF NOT EXISTS`, controlled by
-   `RUN_DB_CREATE`).
+- `APP_ENV=production`, `DEBUG=false`
+- `JWT_SECRET` = a long random string
+- `DATABASE_URL` = the Supabase **transaction pooler** URI (`:6543`, `?pgbouncer=true&sslmode=require`)
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-only secret), `SUPABASE_STORAGE_BUCKET=fdr-documents` — store
+  document blobs in Supabase Storage instead of the ephemeral serverless disk (bucket already created).
+- `CRON_SECRET` = a long random string (Vercel Cron sends it as `Authorization: Bearer …` to `/api/v1/monitoring/cron`)
+- `SCHEDULER_ENABLED=false` (the in-process scheduler is replaced by the Vercel Cron hit)
+- Leave `VITE_API_BASE` empty and `CORS_ORIGINS` unset — frontend and API are same-origin on the Services project.
 
 **Seeding demo data on Supabase:** auto-seed runs only when `APP_ENV != production`. To populate the demo dataset in
 Supabase, run the seed once from your machine against the production database (with the `SUPABASE_*` and `DATABASE_URL`
