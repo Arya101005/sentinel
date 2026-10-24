@@ -104,7 +104,8 @@ def signup(payload: UserCreate, request: Request, db: Session = Depends(get_db))
         auth_provider="local",
     )
     db.add(user)
-    db.flush()
+    db.commit()
+    db.refresh(user)
 
     record_audit(
         db,
@@ -114,7 +115,6 @@ def signup(payload: UserCreate, request: Request, db: Session = Depends(get_db))
         entity_id=user.id,
         request_id=request.headers.get("X-Request-ID"),
     )
-    db.commit()
 
     token = create_access_token(user)
     return {

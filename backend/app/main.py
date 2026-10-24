@@ -44,19 +44,7 @@ async def lifespan(app: FastAPI):
         init_db()
     with session_scope() as db:
         ensure_default_settings(db)
-        # Development/demo bootstrap: seed synthetic data on an empty database.
-        if settings.app_env != "production":
-            from .seed import seed_if_empty
-
-            seed_if_empty(db)
-    if settings.scheduler_enabled:
-        start_scheduler()
-        logger.info(
-            "Scheduler configured (interval %s min).",
-            settings.maturity_check_interval_minutes,
-        )
     yield
-    stop_scheduler()
 
 
 app = FastAPI(
