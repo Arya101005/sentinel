@@ -463,7 +463,10 @@ def _supabase_object_url(object_key: str) -> str:
 
 
 def _supabase_headers(content_type: Optional[str] = None) -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {settings.supabase_service_role_key}"}
+    # Supabase Storage/PostgREST require the `apikey` header alongside the
+    # Bearer token; without it the service tries to parse the key as a JWT.
+    key = settings.supabase_service_role_key
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
     if content_type:
         headers["Content-Type"] = content_type
     return headers
