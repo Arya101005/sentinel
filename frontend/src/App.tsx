@@ -5,6 +5,11 @@ import Layout from "./components/Layout";
 import { ToastProvider, Spinner, PageHeader, Card } from "./components/ui";
 
 import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import Verify from "./pages/Verify";
+import ForgotPass from "./pages/ForgotPass";
+import ResetPass from "./pages/ResetPass";
+import RedirectIfAuth from "./components/RedirectIfAuth";
 import Dashboard from "./pages/Dashboard";
 import Institutions from "./pages/Institutions";
 import InstitutionDetail from "./pages/InstitutionDetail";
@@ -77,7 +82,14 @@ export default function App() {
   return (
     <ToastProvider>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route element={<RedirectIfAuth />}>
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/verify" element={<Verify />} />
+          <Route path="/forgot" element={<ForgotPass />} />
+          <Route path="/reset" element={<ResetPass />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Route>
 
         <Route
           element={

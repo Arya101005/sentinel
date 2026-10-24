@@ -25,6 +25,23 @@ export const ROLE_LABELS: Record<string, string> = {
   auditor: "Read-Only Auditor",
 };
 
+/** Accept legacy cookie-based session headers so the app works across session-style backends. */
+function normalizeSession(raw: { user?: User | null; token?: string | null } | null): { user: User | null; token: string | null } {
+  const user = raw?.user ?? null;
+  const token = raw?.token ?? null;
+  return { user, token };
+}
+
+function useSessionCtx() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useSession must be used within AuthProvider");
+  return ctx;
+}
+
+export function useSession() {
+  return useSessionCtx();
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => getStoredUser<User>());
   const [ready, setReady] = useState(false);
@@ -71,9 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export function useAuth(): AuthState {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
-  return ctx;
+  return useSession();
 }
 
 export function isStaff(role?: string | null): boolean {

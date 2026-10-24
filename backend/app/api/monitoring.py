@@ -252,7 +252,7 @@ def run_checks(
         actor_user_id=user.id,
         action="monitoring.run",
         entity_type="monitoring",
-        metadata={
+        metadata=        {
             "checked": result["checked"],
             "created": result["notifications_created"],
             "escalations": result["escalations_created"],
@@ -261,6 +261,73 @@ def run_checks(
     )
     db.commit()
     return result
+
+
+@router.get("/deploy-info")
+def deploy_info() -> dict:
+    """Diagnostics for the runtime environment and configured services.
+
+    Helpful during deployment triage: it confirms the app names / prefixes,
+    which database mode is active, whether Supabase and email wiring are set,
+    and whether the local-demo SQLite path leaked into production.
+    """
+
+    return {
+        "service": settings.app_name,
+        "environment": settings.app_env,
+        "api_prefix": settings.api_prefix,
+        "database": {
+            "url_set": bool(settings.database_url),
+            "provider": "sqlite" if settings.is_sqlite else "postgresql",
+            "create_on_startup": settings.run_db_create,
+        },
+        "auth": {
+            "provider": settings.auth_provider,
+            "jwt_algorithm": settings.jwt_algorithm,
+            "expire_minutes": settings.access_token_expire_minutes,
+        },
+        "supabase": {
+            "url_set": bool(settings.supabase_url),
+            "storage_bucket": settings.supabase_storage_bucket or None,
+        },
+        "feature_flags": {
+            "ocr_available": False,
+            "email_configured": bool(settings.smtp_enabled and settings.smtp_host),
+            "scheduler_enabled": settings.scheduler_enabled,
+        },
+        "note": "If database.provider is sqlite in production, set DATABASE_URL to a writable PostgreSQL connection string in the Vercel project environment and redeploy the backend.",
+    }
+
+
+@router.get("/request-info")
+def request_info(request: Request) -> dict:
+    """Lightweight inspection of the incoming request metadata and headers.
+
+    Useful for debugging path rewriting, forwarded headers, and root_path
+    differences between local dev and the serverless runtime.
+    """
+    return {
+        "method": request.method,
+        "url": str(request.url),
+        "client": request.client.host if request.client else None,
+        "path": request.url.path,
+        "root_path": request.scope.get("root_path"),
+        "headers": {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower()
+            in ("host", "x-forwarded-proto", "x-forwarded-for", "x-vercel-id", "x-request-id", "user-agent")
+        },
+        "env": {
+            "app_name": settings.app_name,
+            "app_env": settings.app_env,
+            "database_url_set": bool(settings.database_url),
+            "is_sqlite": settings.is_sqlite,
+            "auth_provider": settings.auth_provider,
+            "supabase_url_set": bool(settings.supabase_url),
+            "email_configured": bool(settings.smtp_enabled and settings.smtp_host),
+        },
+    }
 
 
 @router.get("/cron")

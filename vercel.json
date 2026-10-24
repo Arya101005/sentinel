@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "backend/api/index.py": {
+      "memory": 512,
+      "maxDuration": 10
+    }
+  },
   "services": {
     "backend": {
       "root": "backend",
