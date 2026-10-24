@@ -6,9 +6,52 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from .common import ORMModel
+
+# email-validator is an optional dependency of pydantic's EmailStr. On some
+# deployment environments (e.g. Vercel serverless builds) it may be absent,
+# and pydantic's EmailStr.__get_pydantic_core_schema__ will raise
+# ImportError at schema-build time. We use our own stand-in when the real one
+# cannot be imported cleanly so the app starts without email_validator.
+_EMAIL_VALIDATOR_AVAILABLE = False
+try:
+    import email_validator  # noqa: F401
+    from pydantic import EmailStr as _PydanticEmailStr
+    _EMAIL_VALIDATOR_AVAILABLE = True
+except ImportError:
+    _PydanticEmailStr = None  # type: ignore[assignment]
+
+
+class _EmailStr(str):
+    """Stand-in for pydantic.EmailStr when email_validator is unavailable.
+
+    Implements ``__get_pydantic_core_schema__`` so Pydantic can build schemas
+    for models using it without triggering the email_validator import.
+    """
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler):
+        from pydantic_core import core_schema
+
+        def _validate(value):
+            if not isinstance(value, str):
+                raise ValueError("Email must be a string")
+            if value and "@" not in value:
+                raise ValueError("Invalid email address")
+            return value
+
+        return core_schema.no_info_plain_validator_function(
+            _validate,
+            serialization=core_schema.plain_serializer_function_ser_schema(str),
+        )
+
+
+if _EMAIL_VALIDATOR_AVAILABLE:
+    EmailStr = _PydanticEmailStr  # type: ignore[misc,assignment]
+else:  # pragma: no cover
+    EmailStr = _EmailStr  # type: ignore[misc,assignment]
 
 RoleLiteral = Literal["admin", "officer", "institution", "auditor"]
 
