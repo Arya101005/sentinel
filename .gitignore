@@ -50,3 +50,5 @@ vercel-oauth-device.png
 
 # Vite dev server port collision screenshots / logs
 *vite*.log
+.env.vercel.production
+backend/app/services/seed.py
