@@ -1,54 +1,32 @@
-# Python
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-
-# Node
+# dependencies
 node_modules/
-frontend/dist/
-.vite/
+.pnp/
+.pnp.js
 
-# Local environment & secrets
+# build output
+dist/
+dist-ssr/
+.vercel/
+build/
+
+# local env / secrets
 .env
-.env.local
-*.local
+.env.*
+!.env.example
+*.pem
+*.key
 
-# Runtime data
-backend/storage/
-backend/test_storage/
-backend/*.db
-backend/fdr_sentinel.db
-*.sqlite3
-*.db
-
-# Test / tooling output
-test-results/
-playwright-report/
-blob-report/
-playwright/.cache/
+# logs & tooling
+*.log
+npm-debug.log*
 coverage/
+.tmp/
+.lintcache
 
-# Editors / OS / build info
-.vscode/
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
 .idea/
 .DS_Store
 Thumbs.db
-*.tsbuildinfo
-.temp-supabase-creds
-
-.vercel
-
-# Local dev logs / screenshots / Vercel oauth flow captures (not shipped)
-*.log
-screenshots/
-vercel-oauth-device.png
-
-# Vite dev server port collision screenshots / logs
-*vite*.log
-.env.vercel.production
-backend/app/services/seed.py
+*.local

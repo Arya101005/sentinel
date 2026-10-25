@@ -1,284 +1,341 @@
-# FDR SENTINEL
+# FDR Sentinel
 
-**AI-Assisted Security Deposit Monitoring, Verification and Lifecycle Management Platform** (Smart India Hackathon prototype).
+**Monitor Smarter. Verify Better. Act on Time.**
 
-FDR Sentinel is a full-stack application for tracking AICTE-related Fixed Deposit Receipts (FDRs): a central
-registry, OCR-assisted document verification, maturity & matured-non-applicant monitoring, a release workflow
-with clearances, notifications, reports and an audit trail.
+AI-assisted monitoring and verification of security deposit Fixed Deposit Receipts (FDRs) for the
+**All India Council for Technical Education (AICTE), Regulation Bureau** — Smart India Hackathon prototype,
+problem statement **26265**, theme **Smart Automation**.
 
-> **Important honesty note.** This is a *complementary monitoring and decision-support prototype*. It is **not**
-> connected to AICTE's production portal or to any bank's infrastructure. OCR output is a candidate value for
-> human review, never proof of authenticity. A maturity date alone does **not** mean a deposit is eligible for
-> release. No record is auto-approved or auto-released. All seeded data is clearly labelled synthetic DEMO data.
+> **Honesty note.** FDR Sentinel is a complementary monitoring and decision-support prototype. It is **not**
+> connected to AICTE's production portal, to any bank's infrastructure, or to any bank verification API. OCR
+> output is a *candidate value for human review*, never proof of authenticity. A matured FDR is a follow-up
+> item, never a finding of non-compliance. No record is auto-approved and no funds are ever moved.
 
 ---
 
-## 1. Project overview
+## 1. What this repository contains
 
-Five modules:
+A single deployable web application:
 
-- **A. Centralized FDR Registry** — institution-wise and FDR-wise records with lifecycle history.
-- **B. Document Intelligence** — private uploads, PDF text extraction (PyMuPDF), Tesseract OCR fallback, field
-  parsing/normalisation and comparison against submitted values to flag potential discrepancies.
-- **C. Maturity & Non-Applicant Intelligence** — upcoming maturity, matured FDRs with no recorded release
-  application, and renewal/replacement linkage.
-- **D. Verification & Release Workflow** — configurable workflow states, required clearances, assignment,
-  competent-authority gate and timelines.
-- **E. Analytics, Notifications & Audit** — KPI dashboard, charts, reports/CSV+PDF export, deduplicated
-  notifications with escalation, and an append-only audit log.
+| Layer | Implementation |
+| --- | --- |
+| Frontend | React 18 + Vite 5 + TypeScript + Tailwind CSS + shadcn-style UI kit, React Router, TanStack Query, React Hook Form, Zod, Recharts, Lucide |
+| Database & services | PostgreSQL via **Supabase**, Supabase Auth, private Supabase Storage bucket, Row Level Security, SQL migrations |
+| OCR | **pdf.js** text-layer extraction + rendered-page OCR with **Tesseract.js**, entirely in the browser |
+| Server-side | **Vercel Functions** (`/api`) for privileged operations only: bootstrap, user/role management, demo data, scheduled monitoring scan, diagnostics |
+| Tests | Vitest unit tests (96) + a live integration suite (`npm run verify:live`) + browser end-to-end checks |
 
-Roles: **System Administrator**, **AICTE Officer**, **Institution User**, **Read-Only Auditor** (plus a
-*competent authority* flag that only permits release approval at the authority stage).
+### Relationship to the previous code in this repository
 
-## 2. Architecture
+The repository previously held a FastAPI + SQLite prototype with a separate React frontend, plus an
+incompatible, integer-keyed Supabase schema (password hashes in `public.users`, **zero RLS policies**, no Auth
+users). The requested architecture explicitly rules out a separately deployed FastAPI server and MySQL-style
+credentials in the database, so the backend was replaced with Supabase + Vercel Functions, and the interface was
+rebuilt on the same domain model.
+
+Nothing was destroyed silently:
+
+- A JSON export of every legacy table (101 KB) was taken before migration.
+- `supabase/migrations/0000_legacy_cleanup.sql` removes the legacy objects **only** when the legacy marker
+  (`public.users.password_hash`) still exists, so re-running migrations is safe.
+- The legacy rows were synthetic demo rows and are **not** referenced by this implementation.
+- All business rules that the old prototype encoded (role model, workflow stages, maturity classification,
+  discrepancy rules) were carried forward and reimplemented, with tests.
+
+---
+
+## 2. Feature modules
+
+| Module | What is implemented | Where the rule is enforced |
+| --- | --- | --- |
+| **A. Dashboard** | Live counts (total, active, approaching, maturing today, matured, matured-without-release, pending verification, flagged, renewals/releases in progress), maturity buckets chart, verification pie, pending-action lists, recent records, institution table, empty state with one-click demo data | `fn_dashboard_summary()` (SECURITY INVOKER → RLS applies) |
+| **B. FDR registry** | Create / read / update / archive, pagination, sorting, filters, search, CSV export, per-institution duplicate reference index, likely-duplicate detection | RLS + `fdr_records` constraints + `fn_guard_fdr_changes()` |
+| **C. Documents & OCR** | Private upload (PDF/PNG/JPEG/WebP ≤ 10 MB), replacement history, signed-URL viewing, browser OCR, extracted-value review with per-field confidence, manual fallback on OCR failure, reprocessing | Storage bucket policies + `fdr_documents` RLS + `fn_log_event()` |
+| **D. Discrepancy detection** | 13 deterministic rules (required fields, invalid amount, date order, implausible tenure, duplicate suspect, missing document, OCR reference/bank/amount/date/branch mismatch, low confidence, unreadable fields), each with field, submitted value, comparison value and explanation; review with observation | Pure TS rules (`src/lib/discrepancies.ts`) persisted through `fn_upsert_discrepancy_flags()`; review through `fn_review_discrepancy()` |
+| **E. Maturity monitoring** | IST policy timezone, configurable 30/15/7-day windows (editable), upcoming / today / matured / matured-without-application queues, daily idempotent alert scan, alert history | `src/lib/maturity.ts` + `/api/monitoring/scan` + unique `notifications.dedupe_key` |
+| **F. Release & renewal workflow** | draft → submitted → under review → info required → resubmitted → approved/rejected → completed, notes required for consequential steps, timeline, no step skipping, no self-approval, mirrored onto the FDR | `fn_transition_application()` — the UI only renders actions the database will accept |
+| **G. Notifications** | In-app notifications with read/unread, categories, links to records, recipient scoping; email explicitly reported as not configured | `notifications` RLS + generated only by trusted server-side code |
+| **H. Audit trail** | Create/update/document/OCR/discrepancy/verification/workflow/user-role/report-export events, append-only, automatic row triggers | `fn_audit_row()` triggers + `fn_block_audit_mutation()`; browser has **no** INSERT/UPDATE/DELETE grant |
+| **I. Reports** | Active, upcoming, matured, matured-without-release, pending verification, discrepancies, renewals, releases, institution-wise; filters and permission-scoped CSV export with audit entry | Queries run under RLS; export logged via `fn_log_event()` |
+
+Also included: institutions master data, user & role administration, system settings, deployment diagnostics,
+forgot/reset password, and a one-time administrator bootstrap page.
+
+---
+
+## 3. Architecture
 
 ```
-fdr_sentinel/
-├── backend/                 # FastAPI + SQLAlchemy 2.x (Python 3.11/3.12)
-│   ├── app/
-│   │   ├── api/             # REST routers (auth, fdrs, documents, monitoring, ...)
-│   │   ├── services/        # maturity, extraction, discrepancy, workflow, reports, ...
-│   │   ├── schemas/         # Pydantic models
-│   │   ├── models.py        # SQLAlchemy ORM models
-│   │   ├── enums.py         # Roles, workflow matrix, constants
-│   │   ├── security.py      # PBKDF2 passwords, JWT, role dependencies
-│   │   └── seed.py          # Synthetic DEMO dataset (6 scenarios)
-│   ├── tests/               # pytest suite
-│   └── scripts/verify_e2e.py# Live end-to-end API audit script
-└── frontend/                # React 18 + Vite + TypeScript + Tailwind
-    └── src/
-        ├── lib/             # API client, auth context, formatting
-        ├── components/      # Design system + app shell
-        └── pages/           # 20 routed pages
+/
+├── api/                          # Vercel Functions (Node, server-only)
+│   ├── bootstrap.ts              # one-time first administrator
+│   ├── diagnostics.ts            # deployment health checks (admin)
+│   ├── admin/users.ts            # create/list/update users & roles
+│   ├── admin/demo-data.ts        # seed / remove synthetic dataset
+│   ├── monitoring/scan.ts        # daily + on-demand maturity alerts (cron or admin)
+│   └── _lib/                     # shared HTTP, auth, alert and seed logic
+├── src/
+│   ├── lib/
+│   │   ├── maturity.ts           # pure maturity classification (IST policy)
+│   │   ├── discrepancies.ts      # pure deterministic rules
+│   │   ├── duplicates.ts         # likely-duplicate detection
+│   │   ├── workflow.ts           # lifecycle transitions & role gates
+│   │   ├── permissions.ts        # UI capability matrix
+│   │   ├── validation.ts         # Zod schemas (shared with API)
+│   │   ├── csv.ts                # formula-injection-safe CSV
+│   │   ├── ocr/                  # pdf.js + Tesseract pipeline and field parsing
+│   │   ├── supabase.ts / auth.tsx / queries.ts / api.ts
+│   ├── components/               # layout, UI kit, document & discrepancy panels
+│   └── pages/                    # dashboard, registry, maturity, discrepancies,
+│                                 # applications, reports, notifications, audit,
+│                                 # users, institutions, settings, auth pages
+├── supabase/migrations/          # version-controlled SQL (schema, RLS, RPCs, seed defaults)
+├── scripts/
+│   ├── apply-migrations.mjs      # migration runner (server-side connection)
+│   └── verify-live.mjs           # live integration test suite
+└── vercel.json                   # Vite build, SPA rewrite, cron schedule, security headers
 ```
 
-- **Backend:** FastAPI, SQLAlchemy 2.x, Pydantic v2, APScheduler (maturity job). OpenAPI docs at `/docs`.
-- **Database:** SQLite by default for a zero-dependency local demo; set `DATABASE_URL` to PostgreSQL for
-  production (no code changes needed).
-- **Frontend:** React + Vite + TanStack Query + React Hook Form/Zod + Recharts. In development the Vite dev
-  server proxies `/api` → `http://127.0.0.1:8000`, so no CORS setup is needed locally.
+There is **no** separate backend server, no MySQL, and no second deployment. `/api/*` functions live in the same
+project and are routed by Vercel; locally they run through a Vite dev middleware that loads the same handler files,
+so `/api/...` behaves the same in development and production.
 
-## 3. Prerequisites
+---
 
-- **Python 3.11+** (tested on 3.12)
-- **Node.js 18+** and npm (tested on Node 20)
-- Optional: **PostgreSQL 14+** for production, **Tesseract OCR** binary for scanned/image documents.
+## 4. Quick start (local development)
 
-## 4. Environment configuration
-
-Copy the template and adjust values as needed (the local SQLite demo works with the defaults):
+Prerequisites: Node.js 20+, a Supabase project.
 
 ```bash
-cp .env.example .env
-```
-
-Key variables (see `.env.example` for the full list):
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `DATABASE_URL` | `sqlite:///./fdr_sentinel.db` or `postgresql+psycopg://…` | SQLite |
-| `JWT_SECRET` | Secret for access tokens | dev value (change in prod) |
-| `STORAGE_ROOT` | Private directory for uploaded files | `./storage` |
-| `CORS_ORIGINS` | Allowed browser origins | `http://localhost:5173` |
-| `OCR_ENGINE` | `auto` \| `tesseract` \| `none` | `auto` |
-| `SMTP_*` | Optional e-mail delivery | disabled |
-| `SCHEDULER_ENABLED` | Run the maturity monitoring job | `true` |
-
-**Secrets are never committed.** Put real secrets in `.env` (local) or your host's secret store — never in the
-frontend. No privileged database key is exposed to the browser.
-
-## 5. Database setup
-
-For the local demo the schema is created automatically on startup (`init_db` → `create_all`) and seeded if empty.
-To (re)create the synthetic dataset explicitly:
-
-```bash
-cd backend
-python -m app.seed --reset      # drops & recreates all tables, then seeds DEMO data
-```
-
-> **Migrations:** the schema is managed declaratively through SQLAlchemy metadata for this prototype (Alembic is
-> included as a dependency). A versioned Alembic migration chain is a documented limitation — see
-> *Known limitations*. For production, generate an initial Alembic revision from `app.models.Base`.
-
-## 6. Running the backend
-
-```bash
-cd backend
-python -m venv .venv                       # Windows: .venv\Scripts\activate
-source .venv/bin/activate                  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python -m app.seed --reset                 # optional: fresh synthetic dataset
-uvicorn app.main:app --reload --port 8000
-```
-
-- API base: `http://127.0.0.1:8000/api/v1`
-- Health: `GET /api/v1/health`, DB check: `GET /api/v1/health/db`
-- Swagger UI: `http://127.0.0.1:8000/docs`
-
-## 7. Running the frontend
-
-```bash
-cd frontend
+git clone https://github.com/Arya101005/sentinel.git
+cd sentinel
 npm install
-npm run dev            # http://localhost:5173  (proxies /api → 127.0.0.1:8000)
+
+cp .env.example .env          # then fill in the values
+npm run migrate               # applies supabase/migrations/*.sql
+npm run dev                   # http://localhost:5173
 ```
 
-Start the backend first (or set `VITE_BACKEND_URL` to point the proxy elsewhere). Build for production with
-`npm run build` (outputs `frontend/dist`).
+Then open `/bootstrap` and create the first System Administrator. That page stops working permanently once an
+administrator exists.
 
-## 8. Seeding synthetic data
+### Environment variables
 
-```bash
-cd backend && python -m app.seed --reset
-```
+| Variable | Visibility | Purpose |
+| --- | --- | --- |
+| `VITE_SUPABASE_URL` | browser (public) | Supabase project URL |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | browser (public) | Publishable/anon key — safe to ship, all access is governed by RLS |
+| `SUPABASE_URL` | server only | Used by Vercel Functions |
+| `SUPABASE_SECRET_KEY` | **server only** | Service-role equivalent, used *after* re-authorising the caller. Never prefix with `VITE_` |
+| `SUPABASE_DB_URL` | server only, optional | Only for the migration script (pooler host, IPv4) |
+| `CRON_SECRET` | server only | Authorises the scheduled `/api/monitoring/scan` call |
+| `VERIFY_ADMIN_EMAIL` / `VERIFY_ADMIN_PASSWORD` | local only, optional | Used by `npm run verify:live` |
 
-This creates 8 synthetic institutions, 12 users, 23 FDRs, documents and 3 release applications — all marked
-`is_demo = true`. Login password for every demo account is `Demo@Sentinel123`.
+`.env`, `.env.local`, `.env.production` and `.vercel/` are git-ignored. `.env.example` contains placeholders only.
+**The credentials that were shared in plain text during development must be rotated** — see §11.
 
-| Username | Role |
-|---|---|
-| `admin` | System Administrator |
-| `officer` | AICTE Officer |
-| `authority` | Competent Authority (can approve releases) |
-| `auditor` | Read-Only Auditor |
-| `userdemoa` … `userdemoh` | Institution users (one per institution) |
+> **Supabase Auth note.** If "Confirm email" is enabled in the project, self-registered users must confirm their
+> address before signing in. Administrator-created users are created pre-confirmed through the Admin API, so a demo
+> never depends on outbound mail. Email delivery is **not** configured, and the UI never claims an email was sent.
 
-## 9. Running tests
+### Database migrations
 
-```bash
-# Backend (pytest) — 86 tests
-cd backend && python -m pytest
+Migrations are ordered SQL files under `supabase/migrations/`:
 
-# Backend live end-to-end API audit (backend must be running) — 44 checks
-cd backend && python scripts/verify_e2e.py
+| File | Contents |
+| --- | --- |
+| `0000_legacy_cleanup.sql` | One-time, guarded removal of the abandoned prototype schema |
+| `0001_schema.sql` | 12 tables, foreign keys, CHECK constraints, unique partial index on live FDR references, indexes |
+| `0002_functions.sql` | Identity helpers, profile/escalation guards, audit triggers, discrepancy/verification/workflow RPCs, dashboard aggregate, setup status |
+| `0003_rls.sql` | RLS on every table, 37 policies, 4 private-bucket storage policies, audit immutability, settings defaults |
+| `0004_application_requester.sql` | Forces every application to record its real requester |
 
-# Frontend (Vitest + React Testing Library) — 20 tests
-cd frontend && npm test
-
-# Frontend type-check + build
-cd frontend && npm run build
-```
-
-## 10. Deployment
-
-Two containers are provided (see *Docker*) — or deploy the pieces separately:
-
-- **Frontend:** build (`npm run build`) and host `frontend/dist` on any static host (Vercel, Netlify, Cloudflare
-  Pages). Set `VITE_API_BASE` at build time to the backend's public origin if the API is on another domain.
-- **Backend:** run behind a WSGI/ASGI process (`uvicorn app.main:app --workers …`) on a Python-capable host, **or**
-  deploy serverless to Vercel (a serverless entrypoint, Vercel Cron trigger and Supabase Storage are wired up — see
-  below). Set `APP_ENV=production`, a strong `JWT_SECRET`, `DATABASE_URL=postgresql://…`, and configure `CORS_ORIGINS`.
-- **Database:** PostgreSQL (Supabase or any managed Postgres).
-- **Files:** keep `STORAGE_ROOT` on persistent private storage with restricted access, **or** set the `SUPABASE_*`
-  variables to store document blobs in Supabase Storage (required on serverless).
-
-> On a long-running host the background maturity job runs inside the backend process (APScheduler). On a serverless
-> host set `SCHEDULER_ENABLED=false` and let Vercel Cron call `/api/v1/monitoring/cron` instead (configured in the root
-> `vercel.json`).
-
-### Deploying everything to Vercel (single project — Services)
-
-The repo ships a root [`vercel.json`](vercel.json) for Vercel's **Services** preset: one project grouping the FastAPI
-backend (served under `/api`) and the Vite frontend (served under `/`), sharing one domain. Because they share the
-origin, the frontend calls the API **same-origin** at `/api/v1/...` — leave `VITE_API_BASE` empty (no CORS needed).
-
-1. Push to GitHub and import the repo in Vercel. Pick the **Services / multi-service** import (Root Directory `./`);
-   Vercel reads the root `vercel.json` and detects `backend` (FastAPI) and `frontend` (Vite).
-2. Set the environment variables (Project → Settings → Environment Variables) listed under *Backend* below.
-3. Deploy. Rewrites send `/api/*` → the backend and everything else → the frontend (SPA fallback included), and a
-   top-level Vercel Cron hits `/api/v1/monitoring/cron` every 6 hours. `backend/api/index.py` creates the schema on
-   first import (idempotent `CREATE TABLE IF NOT EXISTS`, controlled by `RUN_DB_CREATE`).
-
-**Database → Supabase Postgres:**
-
-1. Create a Supabase project and copy its connection string (use the **Transaction pooler**, port `6543`, for a
-   hosted/serverless backend).
-2. Set `DATABASE_URL` on the backend to the pooler URI with `?sslmode=require`.
-3. `psycopg2-binary` is already in `backend/requirements.txt`. On the first run against an empty database the app
-   creates its schema (`RUN_DB_CREATE=true`) and seeds demo data when `APP_ENV != production`.
-4. Same-origin on Vercel means CORS is not required; if you later split the frontend onto its own domain, add that
-   origin to the backend's `CORS_ORIGINS`.
-
-**Backend environment variables** (set once for the project; they apply to the backend service):
-
-- `APP_ENV=production`, `DEBUG=false`
-- `JWT_SECRET` = a long random string
-- `DATABASE_URL` = the Supabase **transaction pooler** URI (`:6543`, `?pgbouncer=true&sslmode=require`)
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server-only secret), `SUPABASE_STORAGE_BUCKET=fdr-documents` — store
-  document blobs in Supabase Storage instead of the ephemeral serverless disk (bucket already created).
-- `CRON_SECRET` = a long random string (Vercel Cron sends it as `Authorization: Bearer …` to `/api/v1/monitoring/cron`)
-- `SCHEDULER_ENABLED=false` (the in-process scheduler is replaced by the Vercel Cron hit)
-- Leave `VITE_API_BASE` empty and `CORS_ORIGINS` unset — frontend and API are same-origin on the Services project.
-
-**Seeding demo data on Supabase:** auto-seed runs only when `APP_ENV != production`. To populate the demo dataset in
-Supabase, run the seed once from your machine against the production database (with the `SUPABASE_*` and `DATABASE_URL`
-vars set, the sample documents are uploaded to Supabase Storage as well):
-
-    cd backend && SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… DATABASE_URL=… python -m app.seed --reset
-
-## 11. Configuring OCR
-
-- **Embedded-text PDFs** are extracted with PyMuPDF out of the box (no external service).
-- **Scanned PDFs / images** need the Tesseract binary + `pytesseract`:
-  - Install Tesseract and ensure it is on `PATH`.
-  - `OCR_ENGINE=auto` (default) uses it when present; `OCR_ENGINE=none` forces manual review.
-  - `OCR_LANGUAGES` controls the language pack (default `eng`).
-- If no OCR engine is available, processing degrades gracefully to `manual_review_required` with an explicit
-  reason — it never crashes and never invents values. The health endpoint reports `ocr_available`.
-
-## 12. Configuring e-mail
-
-E-mail is **optional**. In-app notifications always work without it.
-
-- Set `SMTP_ENABLED=true`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`,
-  `SMTP_USE_TLS`.
-- Until configured, the notification centre states that delivery is in-app only — successful e-mail delivery is
-  never fabricated.
-
-## 13. Features that require external services
-
-| Feature | External dependency | Without it |
-|---|---|---|
-| Scanned-document OCR | Tesseract binary | Manual review (documented) |
-| E-mail notifications | SMTP server | In-app notifications only |
-| Production persistence | PostgreSQL | SQLite demo database |
-| Bank / AICTE verification | *(none — not integrated)* | **Never claimed.** No live bank or AICTE integration exists. |
-
-The application runs a full local demonstration with **no** external services.
-
-## 14. Using the demonstration scenarios
-
-Seed the data (`python -m app.seed --reset`), start the backend + frontend, and sign in with the accounts above.
-
-| Scenario | Where to look | Expected result |
-|---|---|---|
-| **A. Healthy record** (College A) | FDR Registry → `SBI/AIC/2023/0417` | Complete data, no mismatch, verified. |
-| **B. Matured, no application** (College B) | *Matured non-applicants* → `PNB/CEN/2021/1189` | Appears in queue, counted on dashboard, notification created (de-duplicated). |
-| **C. Amount mismatch** (College C) | *Discrepancy queue* → `BOB/COI/2022/0733` | Declared ₹500,000 vs extracted ₹750,000 flagged; can be resolved with an audit entry. |
-| **D. Upcoming maturity** (College D) | *Upcoming maturity* | Deposit maturing inside the alert window; a notification is generated once (no duplicates). |
-| **E. Pending clearance** (College E) | *Clearance tracking* / application `REL-DEMO-0001` | Bank verification pre-cleared, finance/audit pending, elapsed time shown; advance to authority is blocked until cleared. |
-| **F. Replacement FDR** (College F) | FDR `IOB/FAR/2024/0099-R` | Previous record preserved as *replaced*, replacement linked, active counts updated (no double counting). |
-
-Run the automated checks anytime: `python scripts/verify_e2e.py` (live) and `python -m pytest` (suite).
+Run with `npm run migrate` (uses `SUPABASE_DB_URL`) or paste the files into the Supabase SQL editor in order.
+Every file is written to be re-runnable; `0000` only acts while the legacy marker exists.
 
 ---
 
-## Known limitations
+## 5. Roles and access control
 
-- **No real integrations.** There is no connection to AICTE's production portal or to any bank. Bank
-  verification is a tracked workflow step, not a live check. Nothing in this system should be read as a
-  regulatory or compliance certification.
-- **SQLite by default** for the local demo; use PostgreSQL for production durability and concurrency.
-- **Schema via `create_all`, not a versioned Alembic chain** — sufficient for the prototype; generate an initial
-  Alembic revision before production use.
-- **OCR is best-effort.** Tesseract must be installed for image/scanned documents; otherwise those documents are
-  routed to manual review. Extracted values are candidates, never proof of authenticity.
-- **Local JWT sessions** stored in browser `localStorage` (prototype convenience). Swap in httpOnly cookies /
-  an identity provider for production.
-- **E-mail delivery** is unconfigured by default; notifications are in-app only.
-- The maturity/escalation thresholds are **demonstration defaults**, not AICTE-mandated intervals.
+Authentication is Supabase Auth (email + password). The role lives in `public.profiles` and is **only** writable
+by the service-role API: `fn_guard_profile_changes()` rejects any browser attempt to change `role`,
+`institution_id`, `is_active` or `email`, so no user can promote themselves.
 
-## API documentation
+| Capability | System Administrator | AICTE Officer | Institution User | Read-only Auditor |
+| --- | :-: | :-: | :-: | :-: |
+| View records | all | all | own institution | all |
+| Create / edit FDR | ✔ | ✔ | own institution | — |
+| Upload documents / run OCR | ✔ | ✔ | own institution | — |
+| Set verification status | ✔ | ✔ | — | — |
+| Review discrepancy flags | ✔ | ✔ | — | — |
+| Submit release/renewal request | ✔ | — | own institution | — |
+| Decide (review/approve/reject/complete) | ✔ | ✔ | — | — |
+| Export reports | ✔ | ✔ | own institution | ✔ |
+| Audit trail | full | full | own actions | full |
+| Manage users / institutions / settings | ✔ | — | — | — |
 
-Interactive OpenAPI/Swagger is served by the backend at `/docs` (and `/openapi.json`) once it is running.
+Additional database rules:
+
+- Institution isolation is applied to `fdr_records`, `fdr_documents`, `ocr_extractions`, `discrepancy_flags`,
+  `verification_events`, `release_applications`, `application_events` **and** `storage.objects`.
+- Verified status requires all unresolved flags to be resolved or accepted first.
+- Self-approval is blocked in `fn_transition_application()` unless `system_settings.workflow.allow_self_approval`
+  is explicitly enabled (default `false`).
+- Auditors have no write policy anywhere and no insert/update/delete grants on the audit trail.
+
+Bootstrap of the first administrator is a one-time endpoint that double-checks (before and after user creation)
+that no administrator exists; concurrent attempts are rejected and the extra account is deleted.
+
+---
+
+## 6. Data model
+
+| Table | Purpose |
+| --- | --- |
+| `institutions` | Institution master data (code, type, region, contacts, active flag, demo marker) |
+| `profiles` | One row per Auth user: email, name, role, institution, active flag |
+| `fdr_records` | FDR registry: reference, bank, branch, amount (`numeric(14,2)`), issue/maturity dates, validity/renewal/administrative/verification state, notes, archive + demo markers |
+| `fdr_documents` | Private storage path, MIME type, size, type, current/replaced history, OCR status |
+| `ocr_extractions` | Raw text, extracted candidate fields, per-field confidence, engine, failure reason |
+| `discrepancy_flags` | Rule code, field, severity, submitted vs compared value, explanation, review status/notes |
+| `verification_events` | Officer verification decisions with previous/new status and observations |
+| `release_applications` | Release/renewal lifecycle, requester, claimed amount, decision metadata |
+| `application_events` | Append-only transition log with actor, role, note |
+| `notifications` | Per-recipient in-app alerts with unique `dedupe_key` |
+| `audit_events` | Append-only audit trail (`jsonb` metadata) |
+| `system_settings` | Warning intervals, channels, workflow policy, timezone, organisation, demo/verification notes |
+
+Amounts are `numeric(14,2)` — never floating point. Dates are `date`; all maturity arithmetic uses the
+`Asia/Kolkata` calendar date. `maturity_date > issue_date` and positive amounts are database CHECK constraints.
+
+---
+
+## 7. Maturity monitoring and notifications
+
+- **Policy timezone:** `Asia/Kolkata`, stored in `system_settings.timezone`. "Today" is always computed from that
+  timezone, never the server's local clock.
+- **Warning intervals:** configurable in Settings (default `30, 15, 7`), enforced to be unique and 1–365 days.
+- **Classification:** archived → closed; maturity passed with a recorded release application → *matured, application
+  recorded*; without one → *matured, no release application* (follow-up item); today → *maturing today*; inside the
+  widest window → *approaching*; otherwise *active*.
+- **Scan:** `/api/monitoring/scan`, scheduled daily by `vercel.json` (`0 2 * * *` UTC) with
+  `Authorization: Bearer $CRON_SECRET`, and runnable by an administrator from Settings or the Maturity page.
+  It runs with no user session and does not depend on the browser.
+- **Idempotency:** every candidate alert has a deterministic `dedupe_key`
+  (`maturity-upcoming:<fdr>:<recipient>:<date>:<threshold>` etc.) protected by a UNIQUE constraint, and inserts use
+  `ON CONFLICT DO NOTHING`. A second run creates zero duplicates (verified by the live suite).
+- **Recipients:** administrators and officers are alerted for every institution; an institution user only for their
+  own institution; auditors receive none.
+
+Email delivery is **not** configured. The interface states this explicitly and the scan only writes in-app
+notifications; no success is ever shown for an email that was not sent.
+
+---
+
+## 8. OCR and verification boundaries
+
+1. The upload is validated (MIME, size, non-empty) and stored in the **private** `fdr-documents` bucket under
+   `<institution_id>/<fdr_id>/<uuid>.<ext>`.
+2. Text extraction prefers the PDF text layer (pdf.js); scanned PDFs/images are rendered and OCR'd with Tesseract.js
+   **in the browser**. Nothing is sent to a third-party OCR service.
+3. Extracted candidates are stored with per-field and average confidence and displayed next to the submitted values.
+4. Applying a candidate only fills the form — nothing is saved until the user saves the record, and nothing is ever
+   marked "verified" by OCR.
+5. Deterministic rules create explainable flags. An officer's `verified` decision means *"an officer compared this
+   record with the uploaded document"* — the UI says so and never claims bank attestation.
+6. If OCR fails, the document is kept, the failure is stored with a readable reason, manual entry remains possible,
+   and OCR can be retried.
+
+Known parser limits: printed receipts are parsed with heuristics (Indian date formats, lakh/crore, label-based field
+detection). Handwriting, skew, low-resolution scans and multi-column layouts reduce accuracy; low confidence is
+flagged instead of being trusted silently.
+
+---
+
+## 9. Demonstration data
+
+`POST /api/admin/demo-data` (administrator) creates a refreshable synthetic dataset: 8 institutions, 14 FDRs covering
+all seven required scenarios (active, approaching, maturing today, matured without an application, OCR amount
+mismatch, missing information, renewal in progress, release awaiting review), synthetic PDF "receipts", OCR
+extractions, flags, applications, verification events and notifications. Every row is marked `is_demo` and rendered
+with a *Demonstration data* badge. `DELETE /api/admin/demo-data` removes only `is_demo` rows and their demo
+notifications. The dataset was created with synthetic bank names and fake institutions; nothing is claimed to be
+bank- or AICTE-verified.
+
+---
+
+## 10. Testing
+
+```bash
+npm run typecheck     # TypeScript, app + API
+npm run lint          # ESLint (no errors)
+npm run test          # 96 unit tests
+npm run build         # production build
+npm run verify:live   # live integration suite (needs a running app + Supabase credentials)
+```
+
+Unit coverage (`src/**/*.test.ts(x)`, `api/_lib/alerts.test.ts`): IST date handling and invalid-date rejection,
+maturity classification/buckets/warning thresholds, discrepancy rules (required fields, dates, amount/reference/date
+mismatches, low confidence, duplicates, missing documents), duplicate detection and normalisation, workflow
+transitions and role gates incl. self-approval, capability matrix, Zod form/document validation, OCR date/amount/field
+parsing, CSV escaping and formula-injection prevention, alert scoping/idempotency, and status badge rendering.
+
+`npm run verify:live` provisions temporary users and one temporary FDR in the real project, asserts 49 checks and
+cleans up after itself. It covers: sign-in, administrator APIs, demo seeding, RLS isolation between institutions,
+profile escalation attempts, audit-trail immutability, notification forgery, FDR creation with exact amounts,
+duplicate/date/cross-institution rejection, institution inability to set verification status, private storage
+upload/read isolation, OCR persistence, flag persistence/review authorisation, verification guard, full workflow
+(including step-skipping and self-approval rejection), timeline/audit rows, notification read state, and scheduled
+scan idempotency.
+
+---
+
+## 11. Deployment (Vercel)
+
+1. Import the GitHub repository `Arya101005/sentinel` into Vercel, or run `vercel link` / `vercel --prod`.
+   Framework preset: **Vite**; build `npm run build`; output `dist`. `vercel.json` already configures the SPA rewrite
+   (`/((?!api/).*) → /index.html`), security headers and the daily cron.
+2. Add environment variables in **Vercel → Project → Settings → Environment Variables** for Production and Preview:
+
+   | Name | Value source |
+   | --- | --- |
+   | `VITE_SUPABASE_URL` | Supabase project URL |
+   | `VITE_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable/anon key |
+   | `SUPABASE_URL` | Supabase project URL |
+   | `SUPABASE_SECRET_KEY` | Supabase secret/service-role key (**server only**) |
+   | `CRON_SECRET` | long random string used by the cron header |
+
+   `SUPABASE_DB_URL` is only needed locally for migrations; do not add it to the deployment.
+3. Deploy, then verify `https://<deployment>/api/diagnostics` (as an administrator) reports every check as `ok`.
+4. Run `/bootstrap` once on the new deployment if the project has no administrator yet.
+
+### Security operational notes
+
+- The service-role key is never sent to the browser, never appears in the client bundle and is only read inside
+  `/api` handlers, after the caller's JWT has been validated and their role loaded from the database.
+- **Rotate the Supabase keys and database password that were shared in plain text during development.** Rotating a
+  key does not rewrite git history: if any secret was ever committed, purge it with `git filter-repo`/BFG and
+  invalidate it at the provider. `.gitignore` only prevents *future* commits.
+- Supabase "Confirm email" and password recovery use Supabase Auth; the app stores no password hashes.
+- No `console.log` prints tokens or environment values. Diagnostics reports only presence flags.
+
+---
+
+## 12. Known limitations
+
+- No bank or AICTE verification API is connected. Every screen that mentions verification says what was actually
+  checked. Any claim of authenticity would be false.
+- Email notifications are not configured (in-app notifications work fully).
+- OCR is heuristic and browser-based; large or image-heavy PDFs are OCR'd up to the first five pages.
+- The CSV preview is capped at 200 rows and exports at 2,000 rows per file.
+- Automated tests use synthetic data; no production data was touched.
+- Demo records remain in the project until an administrator removes them from Settings.
+
+---
+
+## 13. Project metadata
+
+- Problem statement: 26265 — AICTE, Regulation Bureau
+- Theme: Smart Automation
+- Tagline: *Monitor Smarter. Verify Better. Act on Time.*
+- All India Council for Technical Education · Regulation Bureau
