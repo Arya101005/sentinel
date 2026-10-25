@@ -1,4 +1,4 @@
-import type { Severity } from './types';
+import type { Severity } from './types.js';
 
 /**
  * Duplicate *detection* only. Nothing here merges or deletes: a human decides

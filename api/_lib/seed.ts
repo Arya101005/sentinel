@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { addDays, todayInPolicyZone } from '../../src/lib/maturity';
-import { detectDiscrepancies } from '../../src/lib/discrepancies';
-import { findLikelyDuplicates } from '../../src/lib/duplicates';
+import { addDays, todayInPolicyZone } from '../../src/lib/maturity.js';
+import { detectDiscrepancies } from '../../src/lib/discrepancies.js';
+import { findLikelyDuplicates } from '../../src/lib/duplicates.js';
 
 type InstitutionSeed = {
   code: string;

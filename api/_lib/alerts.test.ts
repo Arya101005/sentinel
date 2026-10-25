@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMaturityAlerts, type ScanRecord, type ScanRecipient } from './alerts';
+import { buildMaturityAlerts, type ScanRecord, type ScanRecipient } from './alerts.js';
 
 const TODAY = '2026-03-15';
 

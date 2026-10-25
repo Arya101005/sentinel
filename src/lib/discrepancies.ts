@@ -6,8 +6,8 @@
  * is authentic — they only describe inconsistencies a human should review.
  */
 
-import { daysUntil, todayInPolicyZone } from './maturity';
-import { findLikelyDuplicates, type DuplicateCandidate, type DuplicateTarget } from './duplicates';
+import { daysUntil, todayInPolicyZone } from './maturity.js';
+import { findLikelyDuplicates, type DuplicateCandidate, type DuplicateTarget } from './duplicates.js';
 
 export type Severity = 'info' | 'warning' | 'critical';
 

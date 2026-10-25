@@ -5,7 +5,7 @@ import {
   normalizeWarningDays,
   todayInPolicyZone,
   warningThresholdFor,
-} from '../../src/lib/maturity';
+} from '../../src/lib/maturity.js';
 
 export interface ScanRecord {
   id: string;

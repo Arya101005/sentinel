@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js';
 import type { VercelRequest } from '@vercel/node';
 import WebSocket from 'ws';
-import { HttpError } from './http';
+import { HttpError } from './http.js';
 
 // Node 20 (used by some Vercel runtimes) has no global WebSocket. Supabase's
 // client constructs a realtime transport eagerly, so provide the polyfill.

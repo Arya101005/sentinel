@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { z } from 'zod';
-import { userInviteSchema } from '../../src/lib/validation';
-import { assertMethod, handleError, HttpError, readJsonBody, sendJson } from '../_lib/http';
-import { requireAdmin, requireUser } from '../_lib/supabase';
+import { userInviteSchema } from '../../src/lib/validation.js';
+import { assertMethod, handleError, HttpError, readJsonBody, sendJson } from '../_lib/http.js';
+import { requireAdmin, requireUser } from '../_lib/supabase.js';
 
 const updateSchema = z.object({
   id: z.string().uuid('A valid user id is required'),

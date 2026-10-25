@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { assertMethod, handleError, sendJson } from '../_lib/http';
-import { requireAdmin, requireUser } from '../_lib/supabase';
-import { removeDemoData, seedDemoData } from '../_lib/seed';
+import { assertMethod, handleError, sendJson } from '../_lib/http.js';
+import { requireAdmin, requireUser } from '../_lib/supabase.js';
+import { removeDemoData, seedDemoData } from '../_lib/seed.js';
 
 /**
  * POST   /api/admin/demo-data  create/refresh the synthetic demonstration dataset

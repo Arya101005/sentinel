@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { bootstrapRequestSchema } from '../src/lib/validation';
-import { assertMethod, handleError, HttpError, readJsonBody, sendJson } from './_lib/http';
-import { adminClient } from './_lib/supabase';
+import { bootstrapRequestSchema } from '../src/lib/validation.js';
+import { assertMethod, handleError, HttpError, readJsonBody, sendJson } from './_lib/http.js';
+import { adminClient } from './_lib/supabase.js';
 
 /**
  * POST /api/bootstrap

@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { assertMethod, handleError, sendJson } from '../_lib/http';
-import { requireCronOrAdmin } from '../_lib/supabase';
-import { runMaturityScan } from '../_lib/alerts';
+import { assertMethod, handleError, sendJson } from '../_lib/http.js';
+import { requireCronOrAdmin } from '../_lib/supabase.js';
+import { runMaturityScan } from '../_lib/alerts.js';
 
 /**
  * GET|POST /api/monitoring/scan

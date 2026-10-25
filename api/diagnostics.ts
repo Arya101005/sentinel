@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { assertMethod, handleError, sendJson } from './_lib/http';
-import { requireAdmin, requireUser } from './_lib/supabase';
+import { assertMethod, handleError, sendJson } from './_lib/http.js';
+import { requireAdmin, requireUser } from './_lib/supabase.js';
 
 /**
  * GET /api/diagnostics — confirms that server-only configuration exists and the
