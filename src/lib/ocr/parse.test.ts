@@ -98,3 +98,37 @@ describe('receipt parsing', () => {
     expect(fields.deposit_amount).toBe('625000.00');
   });
 });
+
+describe('field provenance (source lines)', () => {
+  const text = [
+    'STATE BANK OF INDIA',
+    'FIXED DEPOSIT RECEIPT',
+    'FDR No: SBI/FDR/2024/00123',
+    'Deposit Amount: Rs. 15,00,000.00',
+    'Date of Issue: 01/03/2025',
+    'Maturity Date: 01/03/2026',
+  ].join('\n');
+
+  it('records the document line each candidate value was read from', () => {
+    const { sources } = parseOcrText(text);
+    expect(sources.fdr_reference_number).toContain('FDR No');
+    expect(sources.deposit_amount).toContain('Deposit Amount');
+    expect(sources.issue_date).toContain('Date of Issue');
+    expect(sources.maturity_date).toContain('Maturity Date');
+  });
+
+  it('keeps sources empty when nothing was extracted, instead of guessing', () => {
+    const { sources, fields } = parseOcrText('a scan with no useful values at all');
+    expect(fields.fdr_reference_number).toBeNull();
+    expect(sources.fdr_reference_number).toBeNull();
+    expect(sources.deposit_amount).toBeNull();
+    expect(sources.maturity_date).toBeNull();
+  });
+
+  it('caps very long source lines so stored provenance stays readable', () => {
+    const longLine = `FDR No: SBI/FDR/2024/00123 ${'word '.repeat(120)}`;
+    const { sources } = parseOcrText(longLine);
+    expect(sources.fdr_reference_number).not.toBeNull();
+    expect((sources.fdr_reference_number as string).length).toBeLessThanOrEqual(240);
+  });
+});

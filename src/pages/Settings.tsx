@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CheckCircle2, Database, Play, RefreshCcw, Settings2, Trash2, XCircle } from 'lucide-react';
+import { AlertTriangle, BellRing, CheckCircle2, Database, Play, RefreshCcw, Settings2, Trash2, XCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { api, type Diagnostics, type SetupStatus } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -32,6 +32,11 @@ export default function SettingsPage() {
   const [warnings, setWarnings] = useState('30, 15, 7');
   const [warningsError, setWarningsError] = useState<string | null>(null);
   const [allowSelf, setAllowSelf] = useState(false);
+  const [events, setEvents] = useState({
+    maturity_upcoming: true,
+    maturity_today: true,
+    matured_no_application: true,
+  });
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [scanResult, setScanResult] = useState<Record<string, number> | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
@@ -42,6 +47,7 @@ export default function SettingsPage() {
     if (settings.data) {
       setWarnings(settings.data.warningDays.join(', '));
       setAllowSelf(settings.data.allowSelfApproval);
+      setEvents(settings.data.notificationEvents);
     }
   }, [settings.data]);
 
@@ -202,6 +208,54 @@ export default function SettingsPage() {
                 To enable email, add an authorised transactional provider and its server-side credentials, then implement the
                 send step in the scheduled scan function. The in-app channel works regardless.
               </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BellRing className="h-4 w-4 text-slate-500" /> Notification events
+              </CardTitle>
+              <CardDescription>
+                Choose which maturity events create in-app notifications during the daily scan. Duplicates are always
+                de-duplicated per event and recipient, regardless of these settings.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2.5">
+              {(
+                [
+                  ['maturity_upcoming', 'Approaching maturity', 'Inside the configured warning windows.'],
+                  ['maturity_today', 'Maturity reached', 'On the maturity date itself.'],
+                  [
+                    'matured_no_application',
+                    'Matured without a recorded release application',
+                    'Follow-up prompt only — never a finding of non-compliance.',
+                  ],
+                ] as const
+              ).map(([key, label, hint]) => (
+                <label
+                  key={key}
+                  className="flex items-start gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                    checked={events[key]}
+                    onChange={(event) => setEvents((current) => ({ ...current, [key]: event.target.checked }))}
+                  />
+                  <span>
+                    {label}
+                    <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">{hint}</span>
+                  </span>
+                </label>
+              ))}
+              <Button
+                size="sm"
+                loading={saveSetting.isPending}
+                onClick={() => saveSetting.mutate({ key: 'notification_events', value: events })}
+              >
+                Save notification events
+              </Button>
             </CardContent>
           </Card>
 

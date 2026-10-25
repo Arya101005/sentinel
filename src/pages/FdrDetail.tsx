@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useForm, type FieldErrors, type UseFormRegister } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -41,6 +41,7 @@ import {
 } from '@/lib/format';
 import { errorMessage } from '@/lib/utils';
 import { DocumentPanel } from '@/components/DocumentPanel';
+import { DocumentReview } from '@/components/DocumentReview';
 import { DiscrepancyPanel } from '@/components/DiscrepancyPanel';
 import {
   Alert,
@@ -170,12 +171,37 @@ function CreateFdr() {
   const { role, profile, institutionId } = useAuth();
   const institutions = useInstitutions();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const replacesId = searchParams.get('replaces');
   const { push } = useToast();
   const queryClient = useQueryClient();
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateCandidate[]>([]);
   const [pendingValues, setPendingValues] = useState<ReturnType<typeof fdrFormSchema.parse> | null>(null);
+
+  // When opened as "/fdrs/new?replaces=<id>", the new instrument inherits the
+  // earlier record's institution and is linked to it. The original is never
+  // modified — its documents, flags and history stay exactly as they are.
+  const replacesQuery = useQuery({
+    queryKey: ['fdr-replaces', replacesId],
+    enabled: Boolean(replacesId),
+    queryFn: async (): Promise<{
+      id: string;
+      fdr_reference_number: string;
+      institution_id: string;
+      maturity_date: string;
+    } | null> => {
+      const { data, error } = await supabase
+        .from('fdr_records')
+        .select('id, fdr_reference_number, institution_id, maturity_date')
+        .eq('id', replacesId as string)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (data as never) ?? null;
+    },
+  });
+  const original = replacesId ? (replacesQuery.data ?? null) : null;
 
   const today = todayInPolicyZone();
   const nextYear = `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`;
@@ -193,6 +219,10 @@ function CreateFdr() {
     },
   });
 
+  useEffect(() => {
+    if (original) form.setValue('institution_id', original.institution_id, { shouldDirty: false });
+  }, [original, form]);
+
   const createRecord = async (parsed: ReturnType<typeof fdrFormSchema.parse>) => {
     setSaving(true);
     setFormError(null);
@@ -203,6 +233,7 @@ function CreateFdr() {
           institution_id: parsed.institution_id,
           fdr_reference_number: parsed.fdr_reference_number,
           issuing_bank: parsed.issuing_bank,
+          replaces_fdr_id: original?.id ?? null,
           branch_name: parsed.branch_name ?? null,
           deposit_amount: parsed.deposit_amount,
           issue_date: parsed.issue_date,
@@ -295,11 +326,28 @@ function CreateFdr() {
                 {formError}
               </Alert>
             )}
+            {replacesId && replacesQuery.isLoading && (
+              <Alert tone="info" title="Loading the earlier instrument…">
+                Checking the record this FDR replaces.
+              </Alert>
+            )}
+            {replacesId && !replacesQuery.isLoading && !original && (
+              <Alert tone="warning" title="The referenced instrument is not available">
+                The FDR passed in the link does not exist or is outside your authorised scope, so this record will be
+                created without a replacement link.
+              </Alert>
+            )}
+            {original && (
+              <Alert tone="info" title={`Registering the renewal or replacement of ${original.fdr_reference_number}`}>
+                The earlier instrument keeps its own record, documents and history. The new FDR will link back to it so
+                both sides remain navigable. Confirm every value against the bank's receipt before saving.
+              </Alert>
+            )}
             <FdrFields
               register={form.register}
               errors={form.formState.errors}
               institutions={institutions.data ?? []}
-              institutionLocked={role === 'institution_user'}
+              institutionLocked={role === 'institution_user' || Boolean(original)}
             />
             <div className="flex flex-wrap justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => navigate('/fdrs')}>
@@ -442,6 +490,42 @@ function ViewFdr({ id }: { id: string }) {
         .order('created_at', { ascending: false });
       if (error) throw new Error(error.message);
       return (data ?? []) as ReleaseApplication[];
+    },
+  });
+
+  const lineageQuery = useQuery({
+    queryKey: ['fdr-lineage', id],
+    queryFn: async (): Promise<{
+      original: { id: string; fdr_reference_number: string } | null;
+      successors: Array<{ id: string; fdr_reference_number: string }>;
+    }> => {
+      const current = await supabase
+        .from('fdr_records')
+        .select('replaces_fdr_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (current.error) throw new Error(current.error.message);
+      const replacesId = (current.data as { replaces_fdr_id: string | null } | null)?.replaces_fdr_id ?? null;
+      const [original, successors] = await Promise.all([
+        replacesId
+          ? supabase
+              .from('fdr_records')
+              .select('id, fdr_reference_number')
+              .eq('id', replacesId)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        supabase
+          .from('fdr_records')
+          .select('id, fdr_reference_number')
+          .eq('replaces_fdr_id', id)
+          .order('created_at', { ascending: true }),
+      ]);
+      if (original.error) throw new Error(original.error.message);
+      if (successors.error) throw new Error(successors.error.message);
+      return {
+        original: (original.data as { id: string; fdr_reference_number: string } | null) ?? null,
+        successors: (successors.data ?? []) as Array<{ id: string; fdr_reference_number: string }>,
+      };
     },
   });
 
@@ -684,6 +768,13 @@ function ViewFdr({ id }: { id: string }) {
           <ArrowLeft className="h-3.5 w-3.5" /> Back to registry
         </Link>
         <div className="flex flex-wrap gap-2">
+          {can(role, 'create_fdr') && !record.archived_at && (
+            <Link to={`/fdrs/new?replaces=${record.id}`}>
+              <Button size="sm" variant="outline">
+                <FilePlus2 className="h-3.5 w-3.5" /> Register replacement FDR
+              </Button>
+            </Link>
+          )}
           {can(role, 'submit_application') && !record.archived_at && (
             <Button size="sm" variant="outline" onClick={() => setApplicationOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> New release / renewal request
@@ -725,6 +816,36 @@ function ViewFdr({ id }: { id: string }) {
       {record.is_demo && (
         <Alert tone="warning" title="Synthetic demonstration record">
           This record is synthetic data created for demonstration. It has not been verified by a bank or by AICTE.
+        </Alert>
+      )}
+
+      {(lineageQuery.data?.original || (lineageQuery.data?.successors.length ?? 0) > 0) && (
+        <Alert
+          tone="info"
+          title="Instrument lineage"
+        >
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            {lineageQuery.data?.original && (
+              <span>
+                Replaces{' '}
+                <Link
+                  to={`/fdrs/${lineageQuery.data.original.id}`}
+                  className="font-medium text-navy-700 hover:underline"
+                >
+                  {lineageQuery.data.original.fdr_reference_number}
+                </Link>{' '}
+                — the earlier instrument, preserved with its own documents, flags and history.
+              </span>
+            )}
+            {(lineageQuery.data?.successors ?? []).map((successor) => (
+              <span key={successor.id}>
+                Replaced by{' '}
+                <Link to={`/fdrs/${successor.id}`} className="font-medium text-navy-700 hover:underline">
+                  {successor.fdr_reference_number}
+                </Link>
+              </span>
+            ))}
+          </div>
         </Alert>
       )}
 
@@ -880,12 +1001,15 @@ function ViewFdr({ id }: { id: string }) {
       )}
 
       {tab === 'documents' && (
-        <DocumentPanel
-          fdr={record}
-          canEdit={can(role, 'upload_document') && !record.archived_at}
-          onApplyField={applyOcrField}
-          onFlagsUpdated={() => void refreshAll()}
-        />
+        <div className="space-y-4">
+          <DocumentPanel
+            fdr={record}
+            canEdit={can(role, 'upload_document') && !record.archived_at}
+            onApplyField={applyOcrField}
+            onFlagsUpdated={() => void refreshAll()}
+          />
+          <DocumentReview fdr={record} canReview={can(role, 'review_discrepancy')} />
+        </div>
       )}
 
       {tab === 'discrepancies' && (

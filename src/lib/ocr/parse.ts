@@ -19,6 +19,12 @@ export interface ParsedOcrFields {
 export interface ParsedOcrResult {
   fields: ParsedOcrFields;
   confidence: Record<keyof ParsedOcrFields, number | null>;
+  /**
+   * Provenance: the source line of the document text each candidate value was
+   * read from, so a reviewer can see *where* an extracted value came from.
+   * Empty when the value could not be tied back to a specific line.
+   */
+  sources: Record<keyof ParsedOcrFields, string | null>;
 }
 
 export interface OcrWord {
@@ -131,6 +137,13 @@ function cleanValue(value: string): string {
   return value.replace(/^[\s:.\-–]+/, '').replace(/\s{2,}/g, ' ').replace(/[.,;:]+$/, '').trim();
 }
 
+/** Short, single-line excerpt of the document text a value was read from. */
+function sourceSnippet(line: string): string | null {
+  const normalized = line.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}…` : normalized;
+}
+
 /**
  * Removes a following label that got joined into the same line when a PDF text
  * layer is flattened (e.g. "Camp, Pune FDR No: ..."). Extraction must never
@@ -181,6 +194,15 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     maturity_date: null,
     institution_name: null,
   };
+  const sources: ParsedOcrResult['sources'] = {
+    fdr_reference_number: null,
+    issuing_bank: null,
+    branch_name: null,
+    deposit_amount: null,
+    issue_date: null,
+    maturity_date: null,
+    institution_name: null,
+  };
 
   const assign = (key: keyof ParsedOcrFields, match: { value: string; line: string } | null) => {
     if (!match) return;
@@ -188,6 +210,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (!value) return;
     result[key] = value;
     confidence[key] = confidenceFor(match.line, words);
+    sources[key] = sourceSnippet(match.line);
   };
 
   // --- Reference number ----------------------------------------------------
@@ -209,6 +232,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (value.length >= 3) {
       result.issuing_bank = value;
       confidence.issuing_bank = confidenceFor(bankLine, words);
+      sources.issuing_bank = sourceSnippet(bankLine);
     }
   }
 
@@ -233,6 +257,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (institutionLine) {
       result.institution_name = trimTrailingLabel(cleanValue(institutionLine));
       confidence.institution_name = confidenceFor(institutionLine, words);
+      sources.institution_name = sourceSnippet(institutionLine);
     }
   }
 
@@ -246,6 +271,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (parsed) {
       result.deposit_amount = parsed;
       confidence.deposit_amount = confidenceFor(amountMatch.line, words);
+      sources.deposit_amount = sourceSnippet(amountMatch.line);
     }
   }
 
@@ -266,6 +292,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (parsed) {
       result.issue_date = parsed;
       confidence.issue_date = confidenceFor(issueMatch.line, words);
+      sources.issue_date = sourceSnippet(issueMatch.line);
     }
   }
 
@@ -277,6 +304,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (parsed) {
       result.maturity_date = parsed;
       confidence.maturity_date = confidenceFor(maturityMatch.line, words);
+      sources.maturity_date = sourceSnippet(maturityMatch.line);
     }
   }
 
@@ -285,6 +313,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
   if (!result.issue_date && uniqueDates.length > 0) {
     result.issue_date = uniqueDates[0].value;
     confidence.issue_date = confidenceFor(uniqueDates[0].line, words);
+    sources.issue_date = sourceSnippet(uniqueDates[0].line);
   }
   if (!result.maturity_date && uniqueDates.length > 1) {
     const later = uniqueDates
@@ -294,6 +323,7 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     if (later) {
       result.maturity_date = later.value;
       confidence.maturity_date = confidenceFor(later.line, words);
+      sources.maturity_date = sourceSnippet(later.line);
     }
   }
 
@@ -304,5 +334,5 @@ export function parseOcrText(text: string, words: OcrWord[] = []): ParsedOcrResu
     result.maturity_date = swap;
   }
 
-  return { fields: result, confidence };
+  return { fields: result, confidence, sources };
 }

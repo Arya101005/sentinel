@@ -150,6 +150,7 @@ export function DocumentPanel({
         raw_text: result.text.slice(0, 200_000),
         fields: parsed.fields,
         field_confidence: parsed.confidence,
+        field_sources: parsed.sources,
         average_confidence: result.meanConfidence,
         processed_by: profile?.id ?? null,
       });
@@ -486,11 +487,20 @@ export function DocumentPanel({
                     {(Object.keys(FIELD_LABELS) as Array<keyof ParsedOcrFields>).map((field) => {
                       const value = latestExtraction.fields?.[field] ?? null;
                       const confidence = latestExtraction.field_confidence?.[field];
+                      const source = latestExtraction.field_sources?.[field] ?? null;
                       return (
                         <tr key={field}>
                           <td className="whitespace-nowrap text-xs font-medium text-slate-600">{FIELD_LABELS[field]}</td>
                           <td className="text-xs">
                             {value ?? <span className="text-slate-400">not detected</span>}
+                            {value && source && (
+                              <span
+                                className="mt-0.5 block max-w-[380px] truncate text-[10px] italic text-slate-400"
+                                title={`Read from: ${source}`}
+                              >
+                                from “{source}”
+                              </span>
+                            )}
                           </td>
                           <td className="text-xs text-slate-500">
                             {typeof confidence === 'number' ? `${Math.round(confidence)}%` : '—'}

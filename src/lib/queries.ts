@@ -8,6 +8,12 @@ export interface AppSettings {
   warningDays: number[];
   emailEnabled: boolean;
   inAppEnabled: boolean;
+  /** Per-event toggles for the maturity scan (Part 9 — configurable preferences). */
+  notificationEvents: {
+    maturity_upcoming: boolean;
+    maturity_today: boolean;
+    matured_no_application: boolean;
+  };
   allowSelfApproval: boolean;
   timezone: string;
   organizationName: string;
@@ -23,6 +29,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   warningDays: [30, 15, 7],
   emailEnabled: false,
   inAppEnabled: true,
+  notificationEvents: { maturity_upcoming: true, maturity_today: true, matured_no_application: true },
   allowSelfApproval: false,
   timezone: 'Asia/Kolkata',
   organizationName: 'AICTE',
@@ -44,6 +51,10 @@ export function settingsFromRows(rows: SystemSetting[]): AppSettings {
     in_app: true,
     email: false,
   });
+  const events = get<{ maturity_upcoming?: boolean; maturity_today?: boolean; matured_no_application?: boolean }>(
+    'notification_events',
+    {},
+  );
   const organization = get<{ name?: string; department?: string; tagline?: string }>('organization', {});
   const workflow = get<{ allow_self_approval?: boolean }>('workflow', { allow_self_approval: false });
   const demo = get<{ enabled?: boolean; label?: string }>('demo_data', { enabled: true });
@@ -53,6 +64,11 @@ export function settingsFromRows(rows: SystemSetting[]): AppSettings {
     warningDays: normalizeWarningDays(get<number[]>('maturity_warning_days', [30, 15, 7])),
     emailEnabled: Boolean(channels.email),
     inAppEnabled: channels.in_app !== false,
+    notificationEvents: {
+      maturity_upcoming: events.maturity_upcoming !== false,
+      maturity_today: events.maturity_today !== false,
+      matured_no_application: events.matured_no_application !== false,
+    },
     allowSelfApproval: workflow.allow_self_approval === true,
     timezone: get<string>('timezone', 'Asia/Kolkata'),
     organizationName: organization.name ?? 'AICTE',

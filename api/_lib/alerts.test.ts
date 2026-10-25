@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMaturityAlerts, type ScanRecord, type ScanRecipient } from './alerts.js';
+import { buildMaturityAlerts, type NotificationEventPrefs, type ScanRecord, type ScanRecipient } from './alerts.js';
 
 const TODAY = '2026-03-15';
 
@@ -108,5 +108,70 @@ describe('idempotency', () => {
       expect(alert.link).toBe('/fdrs/fdr-1');
       expect(alert.fdr_id).toBe('fdr-1');
     }
+  });
+});
+
+describe('notification event preferences', () => {
+  const prefs = (overrides: Partial<NotificationEventPrefs>) => ({
+    maturity_upcoming: true,
+    maturity_today: true,
+    matured_no_application: true,
+    ...overrides,
+  });
+
+  it('suppresses an event category an administrator switched off', () => {
+    const upcomingOff = buildMaturityAlerts(
+      [record({ maturity_date: '2026-03-20' })],
+      recipients,
+      TODAY,
+      [30, 15, 7],
+      prefs({ maturity_upcoming: false }),
+    );
+    expect(upcomingOff).toHaveLength(0);
+
+    const todayOff = buildMaturityAlerts(
+      [record({ maturity_date: TODAY })],
+      recipients,
+      TODAY,
+      [30, 15, 7],
+      prefs({ maturity_today: false }),
+    );
+    expect(todayOff).toHaveLength(0);
+
+    const maturedOff = buildMaturityAlerts(
+      [record({ maturity_date: '2026-02-01' })],
+      recipients,
+      TODAY,
+      [30, 15, 7],
+      prefs({ matured_no_application: false }),
+    );
+    expect(maturedOff).toHaveLength(0);
+  });
+
+  it('keeps every category enabled by default and when the value is malformed', () => {
+    const all = buildMaturityAlerts(
+      [record({ maturity_date: '2026-03-20' })],
+      recipients,
+      TODAY,
+      [30, 15, 7],
+      prefs({}),
+    );
+    expect(all.length).toBeGreaterThan(0);
+    const malformed = buildMaturityAlerts(
+      [record({ maturity_date: '2026-03-20' })],
+      recipients,
+      TODAY,
+      [30, 15, 7],
+      undefined,
+    );
+    expect(malformed.length).toBe(all.length);
+  });
+
+  it('never disables deduplication — keys stay stable whether a category is on or off', () => {
+    const input = [record({ maturity_date: '2026-03-20' })];
+    const on = buildMaturityAlerts(input, recipients, TODAY, [30, 15, 7], prefs({}));
+    const off = buildMaturityAlerts(input, recipients, TODAY, [30, 15, 7], prefs({ maturity_upcoming: false }));
+    expect(off).toHaveLength(0);
+    expect(on.every((alert) => alert.dedupe_key.length > 0)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarClock, Download, Play, ShieldAlert } from 'lucide-react';
@@ -8,6 +8,8 @@ import { useDashboardSummary, useInstitutions, useLogEvent, useSettings } from '
 import { api } from '@/lib/api';
 import { can } from '@/lib/permissions';
 import { addDays, classifyMaturity, hasRecordedApplication, todayInPolicyZone } from '@/lib/maturity';
+import { PENDING_APPLICATION_STATUSES, prioritise } from '@/lib/priority';
+import { APPLICATION_STATUS_LABELS, APPLICATION_TYPE_LABELS } from '@/lib/format';
 import type { FdrRecord, ReleaseApplication } from '@/lib/types';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { downloadCsv, toCsv } from '@/lib/csv';
@@ -26,12 +28,12 @@ import {
   Select,
   Spinner,
 } from '@/components/ui/primitives';
-import { MaturityBadge, Table, TableShell, Tabs } from '@/components/ui/data-display';
+import { MaturityBadge, PriorityBadge, Table, TableShell, Tabs } from '@/components/ui/data-display';
 import { useToast } from '@/components/ui/overlays';
 
 type AlertTab = 'upcoming' | 'seven' | 'today' | 'matured' | 'no-release';
 
-type Row = FdrRecord & { release_applications?: Pick<ReleaseApplication, 'id' | 'application_type' | 'status'>[] };
+type Row = FdrRecord & { release_applications?: Pick<ReleaseApplication, 'id' | 'application_type' | 'status' | 'submitted_at'>[] };
 
 export default function MaturityPage() {
   const { role } = useAuth();
@@ -46,6 +48,7 @@ export default function MaturityPage() {
   const { push } = useToast();
   const [search, setSearch] = useState('');
   const [institution, setInstitution] = useState('');
+  const [queueSort, setQueueSort] = useState<'maturity' | 'priority'>('maturity');
   const [exporting, setExporting] = useState(false);
   const warningDays = useMemo(() => settings.data?.warningDays ?? [30, 15, 7], [settings.data?.warningDays]);
 
@@ -71,7 +74,7 @@ export default function MaturityPage() {
       let query = supabase
         .from('fdr_records')
         .select(
-          'id, institution_id, fdr_reference_number, issuing_bank, branch_name, deposit_amount, issue_date, maturity_date, validity_status, renewal_status, administrative_status, verification_status, notes, submitted_at, last_verified_at, archived_at, is_demo, created_by, created_at, updated_at, institutions(id, institution_name, institution_code), release_applications(id, application_type, status)',
+          'id, institution_id, fdr_reference_number, issuing_bank, branch_name, deposit_amount, issue_date, maturity_date, validity_status, renewal_status, administrative_status, verification_status, notes, submitted_at, last_verified_at, archived_at, is_demo, created_by, created_at, updated_at, institutions(id, institution_name, institution_code), release_applications(id, application_type, status, submitted_at)',
         )
         .is('archived_at', null)
         .eq('validity_status', 'active')
@@ -86,25 +89,84 @@ export default function MaturityPage() {
     },
   });
 
+  // Two lightweight signal queries power the deterministic priority column:
+  // how many open discrepancy flags a record has, and whether a current
+  // supporting document exists.
+  const signals = useQuery({
+    queryKey: ['priority-signals'],
+    staleTime: 30_000,
+    queryFn: async () => {
+      const [flagsResult, documentsResult] = await Promise.all([
+        supabase.from('discrepancy_flags').select('fdr_id').eq('status', 'open').limit(2000),
+        supabase.from('fdr_documents').select('fdr_id').eq('is_current', true).limit(2000),
+      ]);
+      if (flagsResult.error) throw new Error(flagsResult.error.message);
+      if (documentsResult.error) throw new Error(documentsResult.error.message);
+      const openFlags = new Map<string, number>();
+      for (const row of flagsResult.data ?? []) {
+        openFlags.set(row.fdr_id, (openFlags.get(row.fdr_id) ?? 0) + 1);
+      }
+      const withDocument = new Set((documentsResult.data ?? []).map((row) => row.fdr_id));
+      return { openFlags, withDocument };
+    },
+  });
+
+  const prioritiseRecord = useCallback(
+    (record: Row) => {
+      const maturity = classifyMaturity(
+        {
+          maturity_date: record.maturity_date,
+          validity_status: record.validity_status,
+          archived_at: record.archived_at,
+          release_application_statuses: (record.release_applications ?? [])
+            .filter((application) => application.application_type === 'release')
+            .map((application) => application.status),
+        },
+        today,
+        warningDays,
+      );
+      return prioritise({
+        daysToMaturity: maturity.daysToMaturity,
+        maturedWithoutApplication: maturity.state === 'matured_no_application',
+        unresolvedFlags: signals.data?.openFlags.get(record.id) ?? 0,
+        // Before signals load, assume a document exists so rows never flash an
+        // unjustified "missing document" penalty.
+        hasDocument: signals.data ? signals.data.withDocument.has(record.id) : true,
+        pendingApplication: (record.release_applications ?? []).some((application) =>
+          PENDING_APPLICATION_STATUSES.has(application.status),
+        ),
+        verificationStatus: record.verification_status,
+        warningDays,
+      });
+    },
+    [signals.data, today, warningDays],
+  );
+
   const rows = useMemo(() => {
     const all = recordsQuery.data ?? [];
-    const filtered = tab === 'no-release'
-      ? all.filter((record) => {
-          const statuses = (record.release_applications ?? [])
-            .filter((application) => application.application_type === 'release')
-            .map((application) => application.status);
-          return !hasRecordedApplication(statuses);
-        })
-      : all;
-    if (!search.trim()) return filtered;
+    const filtered =
+      tab === 'no-release'
+        ? all.filter((record) => {
+            const statuses = (record.release_applications ?? [])
+              .filter((application) => application.application_type === 'release')
+              .map((application) => application.status);
+            return !hasRecordedApplication(statuses);
+          })
+        : all;
     const term = search.trim().toLowerCase();
-    return filtered.filter(
-      (record) =>
-        record.fdr_reference_number.toLowerCase().includes(term) ||
-        record.issuing_bank.toLowerCase().includes(term) ||
-        (record.institutions?.institution_name ?? '').toLowerCase().includes(term),
-    );
-  }, [recordsQuery.data, search, tab]);
+    const searched = term
+      ? filtered.filter(
+          (record) =>
+            record.fdr_reference_number.toLowerCase().includes(term) ||
+            record.issuing_bank.toLowerCase().includes(term) ||
+            (record.institutions?.institution_name ?? '').toLowerCase().includes(term),
+        )
+      : filtered;
+    if (queueSort === 'priority') {
+      return [...searched].sort((a, b) => prioritiseRecord(b).score - prioritiseRecord(a).score);
+    }
+    return searched;
+  }, [recordsQuery.data, search, tab, queueSort, prioritiseRecord]);
 
   const scanMutation = useMutation({
     mutationFn: () => api.runMaturityScan(),
@@ -235,6 +297,15 @@ export default function MaturityPage() {
           {rows.length} record(s) in this view
           {recordsQuery.data?.length === 500 ? ' (first 500 shown)' : ''}
         </span>
+        <Select
+          aria-label="Sort the maturity queue"
+          className="ml-auto w-[230px]"
+          value={queueSort}
+          onChange={(event) => setQueueSort(event.target.value as 'maturity' | 'priority')}
+        >
+          <option value="maturity">Sort: by maturity date</option>
+          <option value="priority">Sort: by priority (explained)</option>
+        </Select>
       </div>
 
       {recordsQuery.error && (
@@ -266,6 +337,8 @@ export default function MaturityPage() {
                 <th className="text-right">Amount</th>
                 <th>Maturity date</th>
                 <th>Position</th>
+                <th>Priority</th>
+                <th>Latest request</th>
                 <th>Verification</th>
               </tr>
             </thead>
@@ -283,6 +356,10 @@ export default function MaturityPage() {
                   today,
                   warningDays,
                 );
+                const priority = prioritiseRecord(record);
+                const latestApplication = [...(record.release_applications ?? [])].sort((a, b) =>
+                  (b.submitted_at ?? '').localeCompare(a.submitted_at ?? ''),
+                )[0];
                 return (
                   <tr key={record.id}>
                     <td>
@@ -306,6 +383,25 @@ export default function MaturityPage() {
                     </td>
                     <td>
                       <MaturityBadge state={maturity.state} label={maturity.label} />
+                    </td>
+                    <td>
+                      <PriorityBadge level={priority.level} score={priority.score} reasons={priority.reasons} />
+                    </td>
+                    <td className="max-w-[190px] text-xs text-slate-600">
+                      {latestApplication ? (
+                        <>
+                          <span className="block truncate">
+                            {APPLICATION_TYPE_LABELS[latestApplication.application_type]}
+                          </span>
+                          <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                            {APPLICATION_STATUS_LABELS[latestApplication.status]}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[11px] italic text-slate-400">
+                          None recorded in Sentinel
+                        </span>
+                      )}
                     </td>
                     <td className="text-xs capitalize text-slate-600">{record.verification_status.replace(/_/g, ' ')}</td>
                   </tr>

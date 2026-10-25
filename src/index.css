@@ -103,3 +103,63 @@
     display: none !important;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Restrained hero motion — opt-in only when the user has not asked            */
+/* for reduced motion. See MaturityHorizon.tsx.                               */
+/* -------------------------------------------------------------------------- */
+@keyframes horizon-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes card-settle {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes flag-highlight {
+  from {
+    box-shadow: 0 0 0 0 hsl(38 92% 50% / 0.35);
+  }
+  to {
+    box-shadow: 0 0 0 8px hsl(38 92% 50% / 0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .horizon-float {
+    animation: horizon-float 7s ease-in-out infinite;
+  }
+
+  .horizon-card {
+    animation: card-settle 400ms ease-out both;
+  }
+
+  .flag-highlight {
+    animation: flag-highlight 700ms ease-out;
+  }
+}
+
+/* Honour the operating-system reduced-motion setting everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

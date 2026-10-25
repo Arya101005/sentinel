@@ -17,6 +17,7 @@ import type {
   VerificationStatus,
 } from '@/lib/types';
 import type { MaturityState } from '@/lib/maturity';
+import type { PriorityLevel } from '@/lib/priority';
 
 /* -------------------------------------------------------------------------- */
 /* Table                                                                       */
@@ -199,6 +200,46 @@ const MATURITY_TONE: Record<MaturityState, BadgeTone> = {
 
 export function MaturityBadge({ state, label }: { state: MaturityState; label: string }) {
   return <Badge tone={MATURITY_TONE[state]}>{label}</Badge>;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Priority (deterministic, always shown with its reasons)                     */
+/* -------------------------------------------------------------------------- */
+const PRIORITY_TONE: Record<PriorityLevel, BadgeTone> = {
+  urgent: 'danger',
+  high: 'warning',
+  normal: 'info',
+  low: 'outline',
+};
+
+const PRIORITY_LABELS: Record<PriorityLevel, string> = {
+  urgent: 'Urgent',
+  high: 'High',
+  normal: 'Normal',
+  low: 'Routine',
+};
+
+export function PriorityBadge({
+  level,
+  score,
+  reasons,
+}: {
+  level: PriorityLevel;
+  score: number;
+  reasons: string[];
+}) {
+  return (
+    <span
+      className="inline-flex max-w-[220px] flex-col gap-1"
+      title={`Priority score ${score}. ${reasons.join(' ')}`}
+    >
+      <Badge tone={PRIORITY_TONE[level]}>
+        {PRIORITY_LABELS[level]} · {score}
+      </Badge>
+      <span className="line-clamp-2 text-[10px] leading-snug text-slate-500">{reasons[0]}</span>
+      <span className="sr-only">{reasons.join(' ')}</span>
+    </span>
+  );
 }
 
 /* -------------------------------------------------------------------------- */

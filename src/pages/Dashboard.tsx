@@ -50,6 +50,7 @@ import {
   Skeleton,
 } from '@/components/ui/primitives';
 import { MetricCard, VerificationBadge } from '@/components/ui/data-display';
+import { MaturityHorizon } from '@/components/MaturityHorizon';
 import { useToast } from '@/components/ui/overlays';
 
 interface AttentionRecord extends FdrRecord {
@@ -307,6 +308,12 @@ export default function DashboardPage() {
                   to="/applications?type=release"
                 />
               </div>
+
+              <MaturityHorizon
+                buckets={bucketData.map((entry) => ({ bucket: entry.bucket, c: entry.count }))}
+                today={data.today ?? today}
+                warningDays={warningDays}
+              />
 
               <div className="grid gap-4 lg:grid-cols-5">
                 <Card className="lg:col-span-3">

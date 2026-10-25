@@ -36,6 +36,29 @@ export interface AlertCandidate {
   dedupe_key: string;
 }
 
+/** Which maturity events generate notifications (configurable in Settings). */
+export interface NotificationEventPrefs {
+  maturity_upcoming: boolean;
+  maturity_today: boolean;
+  matured_no_application: boolean;
+}
+
+export const DEFAULT_EVENT_PREFS: NotificationEventPrefs = {
+  maturity_upcoming: true,
+  maturity_today: true,
+  matured_no_application: true,
+};
+
+function normalizeEventPrefs(value: unknown): NotificationEventPrefs {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_EVENT_PREFS };
+  const record = value as Record<string, unknown>;
+  return {
+    maturity_upcoming: record.maturity_upcoming !== false,
+    maturity_today: record.maturity_today !== false,
+    matured_no_application: record.matured_no_application !== false,
+  };
+}
+
 /**
  * Pure alert builder, unit tested. One alert per record/recipient/interval, with
  * a deterministic dedupe key so running the scan repeatedly never duplicates.
@@ -45,7 +68,9 @@ export function buildMaturityAlerts(
   recipients: ScanRecipient[],
   today: string,
   warningDays: number[],
+  eventPrefs: NotificationEventPrefs = DEFAULT_EVENT_PREFS,
 ): AlertCandidate[] {
+  const prefs = normalizeEventPrefs(eventPrefs);
   const thresholds = normalizeWarningDays(warningDays);
   const alerts: AlertCandidate[] = [];
 
@@ -71,6 +96,7 @@ export function buildMaturityAlerts(
 
     for (const recipient of eligibleRecipients) {
       if (classification.state === 'matured_no_application') {
+        if (!prefs.matured_no_application) continue;
         alerts.push({
           recipient_id: recipient.id,
           category: 'matured_no_application',
@@ -84,6 +110,7 @@ export function buildMaturityAlerts(
       }
 
       if (classification.state === 'due_today') {
+        if (!prefs.maturity_today) continue;
         alerts.push({
           recipient_id: recipient.id,
           category: 'maturity_today',
@@ -100,6 +127,7 @@ export function buildMaturityAlerts(
         const threshold =
           warningThresholdFor(classification.daysToMaturity, thresholds) ?? thresholds[thresholds.length - 1];
         if (!hasRecordedApplication(record.release_statuses)) {
+          if (!prefs.maturity_upcoming) continue;
           alerts.push({
             recipient_id: recipient.id,
             category: 'maturity_upcoming',
@@ -126,12 +154,16 @@ export interface ScanSummary {
 }
 
 export async function runMaturityScan(admin: SupabaseClient, today = todayInPolicyZone()): Promise<ScanSummary> {
-  const { data: settingsRow } = await admin
+  const { data: settingsRows } = await admin
     .from('system_settings')
-    .select('value')
-    .eq('key', 'maturity_warning_days')
-    .maybeSingle();
-  const warningDays = normalizeWarningDays(settingsRow?.value ?? [30, 15, 7]);
+    .select('key, value')
+    .in('key', ['maturity_warning_days', 'notification_events']);
+  const warningDays = normalizeWarningDays(
+    settingsRows?.find((row) => row.key === 'maturity_warning_days')?.value ?? [30, 15, 7],
+  );
+  const eventPrefs = normalizeEventPrefs(
+    settingsRows?.find((row) => row.key === 'notification_events')?.value,
+  );
 
   const { data: fdrRows, error: fdrError } = await admin
     .from('fdr_records')
@@ -174,7 +206,7 @@ export async function runMaturityScan(admin: SupabaseClient, today = todayInPoli
     institution_id: row.institution_id,
   }));
 
-  const candidates = buildMaturityAlerts(records, recipients, today, warningDays);
+  const candidates = buildMaturityAlerts(records, recipients, today, warningDays, eventPrefs);
 
   let created = 0;
   if (candidates.length > 0) {

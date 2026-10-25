@@ -65,6 +65,8 @@ export interface FdrRecord {
   archived_at: string | null;
   is_demo: boolean;
   created_by: string | null;
+  /** On a renewal/replacement instrument, the earlier FDR it succeeds. */
+  replaces_fdr_id: string | null;
   created_at: string;
   updated_at: string;
   institutions?: Pick<Institution, 'id' | 'institution_name' | 'institution_code'> | null;
@@ -98,6 +100,8 @@ export interface OcrExtraction {
   raw_text: string | null;
   fields: Record<string, string | null>;
   field_confidence: Record<string, number>;
+  /** Document text line each candidate value was read from (provenance for review). */
+  field_sources: Record<string, string | null>;
   average_confidence: number | null;
   error_message: string | null;
   processed_by: string | null;

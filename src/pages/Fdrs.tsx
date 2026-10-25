@@ -8,7 +8,7 @@ import { useInstitutions, useSettings } from '@/lib/queries';
 import { can } from '@/lib/permissions';
 import { addDays, classifyMaturity, todayInPolicyZone } from '@/lib/maturity';
 import type { FdrRecord, ReleaseApplication } from '@/lib/types';
-import { formatCurrency, formatDate, VERIFICATION_LABELS } from '@/lib/format';
+import { formatCurrency, formatDate, VERIFICATION_LABELS, RENEWAL_LABELS, APPLICATION_STATUS_LABELS } from '@/lib/format';
 import { downloadCsv, toCsv } from '@/lib/csv';
 import { errorMessage } from '@/lib/utils';
 import { useToast } from '@/components/ui/overlays';
@@ -40,13 +40,17 @@ export default function FdrListPage() {
   const logEvent = useLogEvent();
   const today = todayInPolicyZone();
 
-  const [searchInput, setSearchInput] = useState('');
-  const [search, setSearch] = useState('');
+  // Every filter, the sort order and the search term are mirrored into the URL
+  // so a queue view can be bookmarked, shared and restored exactly.
+  const [searchInput, setSearchInput] = useState(searchParams.get('q') ?? '');
+  const [search, setSearch] = useState(searchParams.get('q') ?? '');
   const [institution, setInstitution] = useState(searchParams.get('institution') ?? '');
   const [verification, setVerification] = useState(searchParams.get('verification') ?? '');
   const [maturity, setMaturity] = useState(searchParams.get('maturity') ?? '');
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [sort, setSort] = useState('updated_at');
+  const [renewal, setRenewal] = useState(searchParams.get('renewal') ?? '');
+  const [requestStatus, setRequestStatus] = useState(searchParams.get('request') ?? '');
+  const [includeArchived, setIncludeArchived] = useState(searchParams.get('archived') === '1');
+  const [sort, setSort] = useState(searchParams.get('sort') ?? 'updated_at');
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
 
@@ -63,42 +67,95 @@ export default function FdrListPage() {
     if (institution) params.set('institution', institution);
     if (verification) params.set('verification', verification);
     if (maturity) params.set('maturity', maturity);
+    if (renewal) params.set('renewal', renewal);
+    if (requestStatus) params.set('request', requestStatus);
+    if (search) params.set('q', search);
+    if (sort !== 'updated_at') params.set('sort', sort);
+    if (includeArchived) params.set('archived', '1');
     setSearchParams(params, { replace: true });
-  }, [institution, verification, maturity, setSearchParams]);
+  }, [institution, verification, maturity, renewal, requestStatus, search, sort, includeArchived, setSearchParams]);
 
   const warningDays = settings.data?.warningDays ?? [30, 15, 7];
 
-  const buildQuery = (forExport = false) => {
+  const resolveFilterContext = async (): Promise<{ requestIds: string[] | null; searchInstitutionIds: string[] }> => {
+    let requestIds: string[] | null = null;
+    if (requestStatus) {
+      const { data: matching, error: requestError } = await supabase
+        .from('release_applications')
+        .select('fdr_id')
+        .eq('status', requestStatus)
+        .limit(1000);
+      if (requestError) throw new Error(requestError.message);
+      requestIds = [...new Set((matching ?? []).map((row) => row.fdr_id))];
+    }
+
+    let searchInstitutionIds: string[] = [];
+    const term = search.replace(/[(),*.]/g, ' ').trim();
+    if (term) {
+      // PostgREST cannot reference embedded columns inside or(), so institution
+      // name/code matches are resolved to ids first and included that way.
+      const pattern = `%${term}%`;
+      const { data: institutionsMatched, error: institutionError } = await supabase
+        .from('institutions')
+        .select('id')
+        .or(`institution_name.ilike.${pattern},institution_code.ilike.${pattern}`)
+        .limit(50);
+      if (institutionError) throw new Error(institutionError.message);
+      searchInstitutionIds = (institutionsMatched ?? []).map((row) => row.id);
+    }
+
+    return { requestIds, searchInstitutionIds };
+  };
+
+  const buildQuery = (forExport = false, context?: { requestIds: string[] | null; searchInstitutionIds: string[] }) => {
     let query = supabase
       .from('fdr_records')
       .select(SELECT_COLUMNS, forExport ? undefined : { count: 'exact' });
     if (!includeArchived) query = query.is('archived_at', null);
     if (institution) query = query.eq('institution_id', institution);
     if (verification) query = query.eq('verification_status', verification);
+    if (renewal) query = query.eq('renewal_status', renewal);
     if (maturity) {
       if (maturity === 'matured') query = query.eq('validity_status', 'active').lt('maturity_date', today);
       else if (maturity === 'today') query = query.eq('validity_status', 'active').eq('maturity_date', today);
-      else if (maturity === 'upcoming') query = query.eq('validity_status', 'active').gte('maturity_date', today).lte('maturity_date', addDays(today, warningDays[0] ?? 30));
+      else if (maturity === 'upcoming')
+        query = query
+          .eq('validity_status', 'active')
+          .gte('maturity_date', today)
+          .lte('maturity_date', addDays(today, warningDays[0] ?? 30));
       else if (maturity === 'active') query = query.eq('validity_status', 'active').gt('maturity_date', today);
     }
+    if (requestStatus) {
+      // Filter by the *application* status (release or renewal request) with an
+      // id list resolved first, so the exact pagination count stays correct.
+      if (!context?.requestIds || context.requestIds.length === 0) return null;
+      query = query.in('id', context.requestIds);
+    }
     if (search) {
-      const safe = search.replace(/[(),*]/g, ' ').trim();
+      const safe = search.replace(/[(),*.]/g, ' ').trim();
       if (safe) {
         const term = `%${safe}%`;
-        query = query.or(
-          `fdr_reference_number.ilike.${term},issuing_bank.ilike.${term},branch_name.ilike.${term}`,
-        );
+        const clauses = [
+          `fdr_reference_number.ilike.${term}`,
+          `issuing_bank.ilike.${term}`,
+          `branch_name.ilike.${term}`,
+        ];
+        const institutionIds = context?.searchInstitutionIds ?? [];
+        if (institutionIds.length > 0) clauses.push(`institution_id.in.(${institutionIds.join(',')})`);
+        query = query.or(clauses.join(','));
       }
     }
     return query.order(sort, { ascending: sort === 'fdr_reference_number' });
   };
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['fdrs', { institution, verification, maturity, search, includeArchived, sort, page }],
+    queryKey: ['fdrs', { institution, verification, maturity, renewal, requestStatus, search, includeArchived, sort, page }],
     queryFn: async () => {
       const from = (page - 1) * PAGE_SIZE;
-      const { data: rows, error: queryError, count } = await buildQuery()
-        .range(from, from + PAGE_SIZE - 1);
+      const context = await resolveFilterContext();
+      const query = buildQuery(false, context);
+      if (!query) return { rows: [] as Row[], count: 0 };
+      const { data: rows, error: queryError, count } = await query.range(from, from + PAGE_SIZE - 1);
       if (queryError) throw new Error(queryError.message);
       return { rows: (rows ?? []) as unknown as Row[], count: count ?? 0 };
     },
@@ -107,8 +164,11 @@ export default function FdrListPage() {
   const total = data?.count ?? 0;
 
   const activeFilters = useMemo(
-    () => [institution, verification, maturity, search, includeArchived ? 'archived' : ''].filter(Boolean).length,
-    [institution, verification, maturity, search, includeArchived],
+    () =>
+      [institution, verification, maturity, renewal, requestStatus, search, includeArchived ? 'archived' : ''].filter(
+        Boolean,
+      ).length,
+    [institution, verification, maturity, renewal, requestStatus, search, includeArchived],
   );
 
   const resetFilters = () => {
@@ -117,6 +177,8 @@ export default function FdrListPage() {
     setInstitution('');
     setVerification('');
     setMaturity('');
+    setRenewal('');
+    setRequestStatus('');
     setIncludeArchived(false);
     setSort('updated_at');
     setPage(1);
@@ -125,7 +187,13 @@ export default function FdrListPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const { data: rows, error: exportError } = await buildQuery(true).limit(5000);
+      const context = await resolveFilterContext();
+      const exportQuery = buildQuery(true, context);
+      if (!exportQuery) {
+        push({ title: 'Nothing to export', description: 'No records match the current filters.', tone: 'info' });
+        return;
+      }
+      const { data: rows, error: exportError } = await exportQuery.limit(5000);
       if (exportError) throw new Error(exportError.message);
       const records = (rows ?? []) as unknown as Row[];
       if (records.length === 0) {
@@ -152,7 +220,10 @@ export default function FdrListPage() {
         action: 'report.export',
         entity_type: 'fdr_records',
         summary: `Exported ${records.length} FDR records to CSV`,
-        metadata: { filters: { institution, verification, maturity, search, includeArchived }, rows: records.length },
+        metadata: {
+          filters: { institution, verification, maturity, renewal, requestStatus, search, includeArchived },
+          rows: records.length,
+        },
       });
       push({ title: 'CSV exported', description: `${records.length} record(s) exported. The export was added to the audit trail.`, tone: 'success' });
     } catch (exportError) {
@@ -191,7 +262,7 @@ export default function FdrListPage() {
           <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
           <Input
             aria-label="Search FDR records"
-            placeholder="Search reference, bank or branch…"
+            placeholder="Search reference, bank, branch or institution…"
             className="pl-9"
             value={searchInput}
             onChange={(event) => setSearchInput(event.target.value)}
@@ -248,6 +319,40 @@ export default function FdrListPage() {
           <option value="upcoming">Approaching maturity</option>
           <option value="today">Maturing today</option>
           <option value="matured">Matured</option>
+        </Select>
+
+        <Select
+          aria-label="Filter by renewal status"
+          className="w-[175px]"
+          value={renewal}
+          onChange={(event) => {
+            setRenewal(event.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Any renewal state</option>
+          {Object.entries(RENEWAL_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </Select>
+
+        <Select
+          aria-label="Filter by release or renewal request status"
+          className="w-[210px]"
+          value={requestStatus}
+          onChange={(event) => {
+            setRequestStatus(event.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="">Any request status</option>
+          {Object.entries(APPLICATION_STATUS_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
         </Select>
 
         <Select
